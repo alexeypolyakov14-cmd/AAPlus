@@ -2,13 +2,162 @@ const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { URL } = require('url');
 const ExcelJS = require('exceljs');
+const Database = require('better-sqlite3');
+const bcrypt = require('bcryptjs');
 
 const PORT = 3000;
 const MPSTATS_TOKEN = process.env.MPSTATS_TOKEN || '';
 const OPENROUTER_KEY = process.env.OPENROUTER_KEY || '';
-const indexHTML = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf-8');
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
+const DEPLOY_SECRET = process.env.DEPLOY_SECRET || '';
+const INITIAL_BALANCE_TOKENS = 1000; // free tokens on registration
+const TOKEN_MARKUP = 2.5; // markup multiplier on API costs
+let indexHTML = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf-8');
+function reloadIndex() { try { indexHTML = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf-8'); console.log('index.html reloaded'); } catch(e) { console.error('Failed to reload index.html:', e.message); } }
+
+// --- SQLite Database ---
+const db = new Database(path.join(__dirname, 'aaplus.db'));
+db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    display_name TEXT DEFAULT '',
+    balance REAL DEFAULT ${INITIAL_BALANCE_TOKENS},
+    total_spent REAL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    last_login TEXT
+  );
+  CREATE TABLE IF NOT EXISTS transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    amount REAL NOT NULL,
+    description TEXT DEFAULT '',
+    model TEXT DEFAULT '',
+    tokens_input INTEGER DEFAULT 0,
+    tokens_output INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  );
+  CREATE TABLE IF NOT EXISTS chat_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    title TEXT DEFAULT 'Новый чат',
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  );
+  CREATE TABLE IF NOT EXISTS chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    model TEXT DEFAULT '',
+    tokens_used INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (session_id) REFERENCES chat_sessions(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id);
+  CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions(user_id);
+  CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id);
+`);
+console.log('SQLite database initialized');
+
+// --- JWT helpers ---
+function jwtSign(payload) {
+  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+  const body = Buffer.from(JSON.stringify({ ...payload, iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 7 * 24 * 3600 })).toString('base64url');
+  const sig = crypto.createHmac('sha256', JWT_SECRET).update(header + '.' + body).digest('base64url');
+  return header + '.' + body + '.' + sig;
+}
+
+function jwtVerify(token) {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const sig = crypto.createHmac('sha256', JWT_SECRET).update(parts[0] + '.' + parts[1]).digest('base64url');
+    if (sig !== parts[2]) return null;
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
+    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) return null;
+    return payload;
+  } catch(e) { return null; }
+}
+
+// Extract user from Authorization header
+function getAuthUser(req) {
+  const auth = req.headers['authorization'];
+  if (!auth || !auth.startsWith('Bearer ')) return null;
+  const payload = jwtVerify(auth.slice(7));
+  if (!payload || !payload.userId) return null;
+  const user = db.prepare('SELECT id, email, display_name, balance, total_spent, created_at FROM users WHERE id = ?').get(payload.userId);
+  return user || null;
+}
+
+// --- Rate limiting ---
+const rateLimits = new Map();
+const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
+const RATE_LIMIT_MAX = 30; // max requests per window for LLM endpoints
+function checkRateLimit(userId) {
+  const now = Date.now();
+  const key = String(userId);
+  let entry = rateLimits.get(key);
+  if (!entry || now - entry.start > RATE_LIMIT_WINDOW) {
+    entry = { start: now, count: 0 };
+    rateLimits.set(key, entry);
+  }
+  entry.count++;
+  return entry.count <= RATE_LIMIT_MAX;
+}
+// Cleanup old entries every 5 min
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of rateLimits) {
+    if (now - v.start > RATE_LIMIT_WINDOW * 2) rateLimits.delete(k);
+  }
+}, 5 * 60 * 1000);
+
+// --- Token cost estimation ---
+// Approximate cost in "tokens" (our internal currency) based on model and usage
+const MODEL_COSTS = {
+  'google/gemini-2.5-pro-preview': { input: 1.25, output: 10 }, // per 1M tokens in USD
+  'google/gemini-2.5-flash-preview': { input: 0.15, output: 3.5 },
+  'anthropic/claude-sonnet-4': { input: 3, output: 15 },
+  'openai/gpt-4o': { input: 2.5, output: 10 },
+  'openai/gpt-4o-mini': { input: 0.15, output: 0.6 },
+  'default': { input: 1, output: 5 }
+};
+
+function estimateCost(model, inputTokens, outputTokens) {
+  const costs = MODEL_COSTS[model] || MODEL_COSTS['default'];
+  // Cost in USD then convert to our tokens (1 token ≈ $0.001)
+  const usdCost = (inputTokens * costs.input + outputTokens * costs.output) / 1_000_000;
+  return Math.ceil(usdCost * TOKEN_MARKUP * 1000); // internal tokens, minimum 1
+}
+
+// Deduct balance and record transaction
+function deductBalance(userId, amount, description, model, tokensInput, tokensOutput) {
+  const updateBalance = db.prepare('UPDATE users SET balance = balance - ?, total_spent = total_spent + ? WHERE id = ? AND balance >= ?');
+  const insertTx = db.prepare('INSERT INTO transactions (user_id, type, amount, description, model, tokens_input, tokens_output) VALUES (?, ?, ?, ?, ?, ?, ?)');
+  const txn = db.transaction(() => {
+    const result = updateBalance.run(amount, amount, userId, amount);
+    if (result.changes === 0) return false; // insufficient balance
+    insertTx.run(userId, 'deduction', -amount, description, model || '', tokensInput || 0, tokensOutput || 0);
+    return true;
+  });
+  return txn();
+}
+
+function addBalance(userId, amount, description) {
+  db.prepare('UPDATE users SET balance = balance + ? WHERE id = ?').run(amount, userId);
+  db.prepare('INSERT INTO transactions (user_id, type, amount, description) VALUES (?, ?, ?, ?)').run(userId, 'topup', amount, description);
+}
 
 // --- Global error handlers ---
 process.on('uncaughtException', (err) => { console.error('Uncaught exception:', err.message); });
@@ -1120,11 +1269,104 @@ async function generateDCFExcel(dcf, company, ticker) {
 const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
   const url = new URL(req.url, `http://localhost:${PORT}`);
+
+  // === Auth: Register ===
+  if (url.pathname === '/api/auth/register' && req.method === 'POST') {
+    try {
+      const body = JSON.parse(await readBody(req, 8192));
+      const { email, password, display_name } = body;
+      if (!email || !password) return jsonResp(res, 400, { error: 'Email и пароль обязательны' });
+      if (password.length < 6) return jsonResp(res, 400, { error: 'Пароль минимум 6 символов' });
+      const emailLower = email.toLowerCase().trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailLower)) return jsonResp(res, 400, { error: 'Некорректный email' });
+      const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(emailLower);
+      if (existing) return jsonResp(res, 409, { error: 'Этот email уже зарегистрирован' });
+      const hash = bcrypt.hashSync(password, 10);
+      const result = db.prepare('INSERT INTO users (email, password_hash, display_name) VALUES (?, ?, ?)').run(emailLower, hash, display_name || '');
+      const token = jwtSign({ userId: result.lastInsertRowid, email: emailLower });
+      jsonResp(res, 201, { token, user: { id: result.lastInsertRowid, email: emailLower, display_name: display_name || '', balance: INITIAL_BALANCE_TOKENS } });
+    } catch(e) { jsonResp(res, 500, { error: e.message }); }
+    return;
+  }
+
+  // === Auth: Login ===
+  if (url.pathname === '/api/auth/login' && req.method === 'POST') {
+    try {
+      const body = JSON.parse(await readBody(req, 8192));
+      const { email, password } = body;
+      if (!email || !password) return jsonResp(res, 400, { error: 'Email и пароль обязательны' });
+      const emailLower = email.toLowerCase().trim();
+      const user = db.prepare('SELECT * FROM users WHERE email = ?').get(emailLower);
+      if (!user || !bcrypt.compareSync(password, user.password_hash)) return jsonResp(res, 401, { error: 'Неверный email или пароль' });
+      db.prepare('UPDATE users SET last_login = datetime(\'now\') WHERE id = ?').run(user.id);
+      const token = jwtSign({ userId: user.id, email: user.email });
+      jsonResp(res, 200, { token, user: { id: user.id, email: user.email, display_name: user.display_name, balance: user.balance, total_spent: user.total_spent } });
+    } catch(e) { jsonResp(res, 500, { error: e.message }); }
+    return;
+  }
+
+  // === Auth: Get current user ===
+  if (url.pathname === '/api/auth/me' && req.method === 'GET') {
+    const user = getAuthUser(req);
+    if (!user) return jsonResp(res, 401, { error: 'Не авторизован' });
+    jsonResp(res, 200, { user });
+    return;
+  }
+
+  // === Balance: Get balance & transactions ===
+  if (url.pathname === '/api/balance' && req.method === 'GET') {
+    const user = getAuthUser(req);
+    if (!user) return jsonResp(res, 401, { error: 'Не авторизован' });
+    const transactions = db.prepare('SELECT type, amount, description, model, tokens_input, tokens_output, created_at FROM transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').all(user.id);
+    jsonResp(res, 200, { balance: user.balance, total_spent: user.total_spent, transactions });
+    return;
+  }
+
+  // === Balance: Add (for testing / admin) ===
+  if (url.pathname === '/api/balance/topup' && req.method === 'POST') {
+    const user = getAuthUser(req);
+    if (!user) return jsonResp(res, 401, { error: 'Не авторизован' });
+    try {
+      const body = JSON.parse(await readBody(req, 4096));
+      const amount = parseFloat(body.amount);
+      if (!amount || amount <= 0 || amount > 100000) return jsonResp(res, 400, { error: 'Некорректная сумма' });
+      addBalance(user.id, amount, body.description || 'Пополнение');
+      const updated = db.prepare('SELECT balance FROM users WHERE id = ?').get(user.id);
+      jsonResp(res, 200, { balance: updated.balance });
+    } catch(e) { jsonResp(res, 500, { error: e.message }); }
+    return;
+  }
+
+  // === Deploy webhook (GitHub) ===
+  if (url.pathname === '/api/deploy' && req.method === 'POST') {
+    if (!DEPLOY_SECRET) return jsonResp(res, 503, { error: 'DEPLOY_SECRET not configured' });
+    readBody(req, 1048576).then(body => {
+      // Verify GitHub signature
+      const sigHeader = req.headers['x-hub-signature-256'] || '';
+      const expectedSig = 'sha256=' + crypto.createHmac('sha256', DEPLOY_SECRET).update(body).digest('hex');
+      if (sigHeader !== expectedSig) {
+        console.warn('Deploy webhook: invalid signature');
+        return jsonResp(res, 403, { error: 'invalid signature' });
+      }
+      console.log('Deploy webhook triggered');
+      jsonResp(res, 200, { status: 'deploying' });
+      // Run deploy script async
+      const { exec } = require('child_process');
+      exec('bash deploy.sh 2>&1', { cwd: __dirname, timeout: 120000 }, (err, stdout, stderr) => {
+        if (err) console.error('Deploy error:', err.message);
+        console.log('Deploy output:', stdout);
+        if (stderr) console.error('Deploy stderr:', stderr);
+        // Reload index.html after deploy (server.js restart handled by pm2)
+        reloadIndex();
+      });
+    }).catch(e => jsonResp(res, 400, { error: e.message }));
+    return;
+  }
 
   // === MPStats: Check if configured ===
   if (url.pathname === '/api/mpstats/status') {
@@ -1937,16 +2179,31 @@ const server = http.createServer(async (req, res) => {
   // === OpenRouter LLM Proxy (non-streaming, kept for compatibility) ===
   if (url.pathname === '/api/llm' && req.method === 'POST') {
     if (!OPENROUTER_KEY) { jsonResp(res, 500, { error: 'OPENROUTER_KEY not configured' }); return; }
+    const authUser = getAuthUser(req);
+    if (authUser) {
+      if (!checkRateLimit(authUser.id)) return jsonResp(res, 429, { error: 'Слишком много запросов, подождите минуту' });
+      if (authUser.balance <= 0) return jsonResp(res, 402, { error: 'Недостаточно токенов. Пополните баланс.' });
+    }
     readBody(req, 262144).then(body => {
       let parsed;
       try { parsed = JSON.parse(body); } catch(e) { jsonResp(res, 400, { error: 'invalid json' }); return; }
+      const modelName = parsed.model || 'google/gemini-2.5-pro-preview';
       const payload = JSON.stringify({
-        model: parsed.model || 'google/gemini-2.5-pro-preview',
+        model: modelName,
         messages: parsed.messages || [],
         max_tokens: Math.min(parsed.max_tokens || 4096, 8192),
         temperature: parsed.temperature || 0.7,
         route: 'fallback'
       });
+      // For non-streaming, we estimate cost upfront (conservative) and adjust later
+      if (authUser) {
+        const estInputTokens = Math.ceil(payload.length / 4);
+        const estOutputTokens = Math.min(parsed.max_tokens || 4096, 4096);
+        const cost = estimateCost(modelName, estInputTokens, estOutputTokens);
+        if (!deductBalance(authUser.id, cost, 'LLM запрос', modelName, estInputTokens, estOutputTokens)) {
+          return jsonResp(res, 402, { error: 'Недостаточно токенов. Пополните баланс.' });
+        }
+      }
       proxyRequest({
         hostname: 'openrouter.ai',
         port: 443,
@@ -1966,17 +2223,34 @@ const server = http.createServer(async (req, res) => {
   // === OpenRouter LLM Streaming Proxy (SSE) ===
   if (url.pathname === '/api/llm/stream' && req.method === 'POST') {
     if (!OPENROUTER_KEY) { jsonResp(res, 500, { error: 'OPENROUTER_KEY not configured' }); return; }
+    const authUser = getAuthUser(req);
+    if (authUser) {
+      if (!checkRateLimit(authUser.id)) return jsonResp(res, 429, { error: 'Слишком много запросов, подождите минуту' });
+      if (authUser.balance <= 0) return jsonResp(res, 402, { error: 'Недостаточно токенов. Пополните баланс.' });
+    }
     readBody(req, 262144).then(body => {
       let parsed;
       try { parsed = JSON.parse(body); } catch(e) { jsonResp(res, 400, { error: 'invalid json' }); return; }
+      const modelName = parsed.model || 'google/gemini-2.5-pro-preview';
       const payload = JSON.stringify({
-        model: parsed.model || 'google/gemini-2.5-pro-preview',
+        model: modelName,
         messages: parsed.messages || [],
         max_tokens: Math.min(parsed.max_tokens || 4096, 8192),
         temperature: parsed.temperature || 0.7,
         stream: true,
         route: 'fallback'
       });
+      // Pre-deduct estimated cost for authenticated users
+      let estimatedCost = 0;
+      if (authUser) {
+        const estInputTokens = Math.ceil(payload.length / 4);
+        const estOutputTokens = Math.min(parsed.max_tokens || 4096, 2048);
+        estimatedCost = estimateCost(modelName, estInputTokens, estOutputTokens);
+        if (!deductBalance(authUser.id, estimatedCost, 'LLM стриминг', modelName, estInputTokens, estOutputTokens)) {
+          return jsonResp(res, 402, { error: 'Недостаточно токенов. Пополните баланс.' });
+        }
+      }
+      let streamedBytes = 0;
       const proxyReq = https.request({
         hostname: 'openrouter.ai',
         port: 443,

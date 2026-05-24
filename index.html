@@ -846,10 +846,64 @@ ul{list-style:none}
   .bt-pct{font-size:12px;min-width:32px}
   .fund-mult-val{font-size:14px}
 }
+/* Auth Modal */
+.auth-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:9999;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity 0.3s}
+.auth-overlay.visible{opacity:1}
+.auth-modal{background:#fff;border-radius:16px;padding:32px;width:90%;max-width:400px;box-shadow:0 20px 60px rgba(0,0,0,0.15);transform:translateY(20px);transition:transform 0.3s}
+.auth-overlay.visible .auth-modal{transform:translateY(0)}
+.auth-modal h2{font-family:var(--font-display);font-size:24px;font-weight:700;margin-bottom:8px;color:#1A1A1A}
+.auth-modal .auth-subtitle{font-size:14px;color:rgba(0,0,0,0.5);margin-bottom:24px}
+.auth-field{margin-bottom:16px}
+.auth-field label{display:block;font-size:12px;font-weight:600;color:rgba(0,0,0,0.5);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px}
+.auth-field input{width:100%;padding:10px 14px;border:1px solid rgba(0,0,0,0.12);border-radius:10px;font-size:14px;background:#F8F9FA;color:#1A1A1A;outline:none;transition:border-color 0.2s;box-sizing:border-box}
+.auth-field input:focus{border-color:var(--accent-1);background:#fff}
+.auth-btn{width:100%;padding:12px;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.2s;background:var(--accent-1);color:#fff;margin-top:8px}
+.auth-btn:hover{background:var(--accent-2);transform:translateY(-1px)}
+.auth-btn:disabled{opacity:0.5;cursor:not-allowed;transform:none}
+.auth-switch{text-align:center;margin-top:16px;font-size:13px;color:rgba(0,0,0,0.5)}
+.auth-switch a{color:var(--accent-1);cursor:pointer;font-weight:600}
+.auth-switch a:hover{text-decoration:underline}
+.auth-error{color:var(--danger);font-size:13px;margin-top:8px;min-height:20px}
+.auth-skip{text-align:center;margin-top:12px}
+.auth-skip a{color:rgba(0,0,0,0.4);cursor:pointer;font-size:12px}
+.auth-skip a:hover{color:rgba(0,0,0,0.6)}
+/* User menu in sidebar */
+.sidebar-user{padding:12px 16px;border-top:1px solid var(--border-glass);display:flex;align-items:center;gap:10px;margin-top:auto}
+.sidebar-user-avatar{width:32px;height:32px;border-radius:8px;background:rgba(59,130,246,0.1);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--accent-1)}
+.sidebar-user-info{flex:1;min-width:0}
+.sidebar-user-email{font-size:12px;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sidebar-user-logout{padding:4px 10px;border-radius:6px;font-size:11px;background:rgba(0,0,0,0.04);border:1px solid var(--border-glass);color:var(--text-secondary);cursor:pointer;transition:all 0.2s}
+.sidebar-user-logout:hover{background:rgba(253,121,168,0.1);color:var(--danger);border-color:rgba(253,121,168,0.2)}
 </style>
 </head>
 <body>
 <noscript><div style="padding:40px;text-align:center;font-family:system-ui,sans-serif"><h2>Для работы AA+ необходим JavaScript</h2><p style="margin-top:12px;color:#666">Пожалуйста, включите JavaScript в настройках браузера и обновите страницу.</p></div></noscript>
+
+<!-- AUTH MODAL -->
+<div class="auth-overlay" id="authOverlay">
+  <div class="auth-modal">
+    <h2 id="authTitle">Вход</h2>
+    <div class="auth-subtitle" id="authSubtitle">Войдите, чтобы начать работу</div>
+    <div id="authForm">
+      <div class="auth-field" id="authNameField" style="display:none">
+        <label>Имя</label>
+        <input type="text" id="authName" placeholder="Как вас зовут?" autocomplete="name">
+      </div>
+      <div class="auth-field">
+        <label>Email</label>
+        <input type="email" id="authEmail" placeholder="you@example.com" autocomplete="email">
+      </div>
+      <div class="auth-field">
+        <label>Пароль</label>
+        <input type="password" id="authPassword" placeholder="Минимум 6 символов" autocomplete="current-password">
+      </div>
+      <div class="auth-error" id="authError"></div>
+      <button class="auth-btn" id="authBtn" onclick="submitAuth()">Войти</button>
+      <div class="auth-switch" id="authSwitch">Нет аккаунта? <a onclick="toggleAuthMode()">Зарегистрироваться</a></div>
+      <div class="auth-skip"><a onclick="skipAuth()">Продолжить без регистрации</a></div>
+    </div>
+  </div>
+</div>
 
 <!-- LANDING PAGE -->
 <div class="landing" id="landing">
@@ -1041,6 +1095,13 @@ ul{list-style:none}
     </div>
     <div class="sidebar-section">Недавние чаты</div>
     <div class="chat-list" id="chatList"></div>
+    <div class="sidebar-user" id="sidebarUser" style="display:none">
+      <div class="sidebar-user-avatar" id="sidebarUserAvatar">U</div>
+      <div class="sidebar-user-info">
+        <div class="sidebar-user-email" id="sidebarUserEmail"></div>
+      </div>
+      <button class="sidebar-user-logout" onclick="logoutUser()">Выйти</button>
+    </div>
   </aside>
 
   <main class="chat-area">
@@ -1218,6 +1279,9 @@ function getSystemPrompt(agent){
 
 // Global state — restore from localStorage (wrapped in try-catch for safety)
 let tokenBalance = 999999;
+let authToken = null;
+let authUser = null;
+let authMode = 'login'; // 'login' or 'register'
 let chatSessions = [];
 let currentChatId = null;
 let currentAgent = null;
@@ -1226,6 +1290,7 @@ let chatHistory = [];
 let allChatMessages = {};
 try {
   tokenBalance = parseInt(localStorage.getItem('aa_tokens')) || 999999;
+  authToken = localStorage.getItem('aa_auth_token') || null;
   chatSessions = JSON.parse(localStorage.getItem('aa_sessions') || '[]');
   currentChatId = JSON.parse(localStorage.getItem('aa_currentChat') || 'null');
   conversationMessages = JSON.parse(localStorage.getItem('aa_context') || '[]');
@@ -1240,6 +1305,7 @@ let isSending = false;
 
 function saveState(){
   try{
+    if(authToken) localStorage.setItem('aa_auth_token', authToken);
     localStorage.setItem('aa_tokens', tokenBalance);
     localStorage.setItem('aa_sessions', JSON.stringify(chatSessions));
     localStorage.setItem('aa_currentChat', JSON.stringify(currentChatId));
@@ -1260,6 +1326,126 @@ function saveState(){
       try { localStorage.setItem('aa_allChats', JSON.stringify(allChatMessages)); } catch(e2){}
     }
   }
+}
+
+// --- Auth functions ---
+function authHeaders() {
+  if (authToken) return { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken };
+  return { 'Content-Type': 'application/json' };
+}
+
+function showAuthModal() {
+  const overlay = document.getElementById('authOverlay');
+  overlay.style.display = 'flex';
+  setTimeout(() => overlay.classList.add('visible'), 10);
+}
+
+function hideAuthModal() {
+  const overlay = document.getElementById('authOverlay');
+  overlay.classList.remove('visible');
+  setTimeout(() => overlay.style.display = 'none', 300);
+}
+
+function toggleAuthMode() {
+  authMode = authMode === 'login' ? 'register' : 'login';
+  document.getElementById('authTitle').textContent = authMode === 'login' ? 'Вход' : 'Регистрация';
+  document.getElementById('authSubtitle').textContent = authMode === 'login' ? 'Войдите, чтобы начать работу' : 'Создайте аккаунт и получите 1000 бесплатных токенов';
+  document.getElementById('authBtn').textContent = authMode === 'login' ? 'Войти' : 'Зарегистрироваться';
+  document.getElementById('authNameField').style.display = authMode === 'register' ? 'block' : 'none';
+  document.getElementById('authSwitch').innerHTML = authMode === 'login'
+    ? 'Нет аккаунта? <a onclick="toggleAuthMode()">Зарегистрироваться</a>'
+    : 'Уже есть аккаунт? <a onclick="toggleAuthMode()">Войти</a>';
+  document.getElementById('authError').textContent = '';
+  document.getElementById('authPassword').setAttribute('autocomplete', authMode === 'login' ? 'current-password' : 'new-password');
+}
+
+async function submitAuth() {
+  const btn = document.getElementById('authBtn');
+  const errEl = document.getElementById('authError');
+  const email = document.getElementById('authEmail').value.trim();
+  const password = document.getElementById('authPassword').value;
+  const displayName = document.getElementById('authName').value.trim();
+  errEl.textContent = '';
+  if (!email || !password) { errEl.textContent = 'Заполните все поля'; return; }
+  if (authMode === 'register' && password.length < 6) { errEl.textContent = 'Пароль минимум 6 символов'; return; }
+  btn.disabled = true;
+  btn.textContent = 'Загрузка...';
+  try {
+    const endpoint = authMode === 'login' ? '/api/auth/login' : '/api/auth/register';
+    const resp = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password, display_name: displayName })
+    });
+    const data = await resp.json();
+    if (!resp.ok) { errEl.textContent = data.error || 'Ошибка'; return; }
+    authToken = data.token;
+    authUser = data.user;
+    tokenBalance = Math.round(data.user.balance);
+    localStorage.setItem('aa_auth_token', authToken);
+    updateAuthUI();
+    updateTokenDisplay();
+    hideAuthModal();
+    enterApp();
+  } catch(e) {
+    errEl.textContent = 'Ошибка сети: ' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = authMode === 'login' ? 'Войти' : 'Зарегистрироваться';
+  }
+}
+
+function skipAuth() {
+  hideAuthModal();
+  enterApp();
+}
+
+async function checkAuth() {
+  if (!authToken) return false;
+  try {
+    const resp = await fetch('/api/auth/me', { headers: { 'Authorization': 'Bearer ' + authToken } });
+    if (!resp.ok) { authToken = null; localStorage.removeItem('aa_auth_token'); return false; }
+    const data = await resp.json();
+    authUser = data.user;
+    tokenBalance = Math.round(data.user.balance);
+    updateAuthUI();
+    updateTokenDisplay();
+    return true;
+  } catch(e) { return false; }
+}
+
+function updateAuthUI() {
+  const userEl = document.getElementById('sidebarUser');
+  if (authUser) {
+    userEl.style.display = 'flex';
+    document.getElementById('sidebarUserEmail').textContent = authUser.email;
+    const initials = (authUser.display_name || authUser.email).substring(0, 2).toUpperCase();
+    document.getElementById('sidebarUserAvatar').textContent = initials;
+  } else {
+    userEl.style.display = 'none';
+  }
+}
+
+function logoutUser() {
+  authToken = null;
+  authUser = null;
+  localStorage.removeItem('aa_auth_token');
+  tokenBalance = 0;
+  updateTokenDisplay();
+  updateAuthUI();
+  showAuthModal();
+}
+
+async function refreshBalance() {
+  if (!authToken) return;
+  try {
+    const resp = await fetch('/api/balance', { headers: { 'Authorization': 'Bearer ' + authToken } });
+    if (resp.ok) {
+      const data = await resp.json();
+      tokenBalance = Math.round(data.balance);
+      updateTokenDisplay();
+    }
+  } catch(e) {}
 }
 
 function restoreChat(){
@@ -1316,6 +1502,16 @@ function init(){
   updateTokenDisplay();
   updateSendBtn();
   document.getElementById('userInput').addEventListener('input', updateSendBtn);
+  // Check auth token on startup
+  if (authToken) {
+    checkAuth().then(valid => {
+      if (!valid) {
+        // Token expired — reset
+        tokenBalance = 999999;
+        updateTokenDisplay();
+      }
+    });
+  }
   // If user has any saved chats, skip landing and go straight to app
   if(chatSessions.length > 0){
     document.body.classList.add('app-mode');
@@ -1402,6 +1598,8 @@ function deductTokens(cost){
   tokenBalance = Math.max(0, tokenBalance - cost);
   updateTokenDisplay();
   saveState();
+  // Refresh real balance from server if authenticated
+  if (authToken) setTimeout(refreshBalance, 2000);
   // Fly animation
   const fly = document.createElement('div');
   fly.className = 'token-deduct';
@@ -1411,15 +1609,27 @@ function deductTokens(cost){
 }
 
 function buyTokens(){
-  tokenBalance += 500;
-  updateTokenDisplay();
-  // Quick feedback
-  const fly = document.createElement('div');
-  fly.className = 'token-deduct';
-  fly.style.color = 'var(--success)';
-  fly.textContent = `+500`;
-  document.body.appendChild(fly);
-  setTimeout(() => fly.remove(), 1300);
+  if (!authToken) {
+    showAuthModal();
+    return;
+  }
+  // For now: add demo tokens via API (will be replaced with payment integration)
+  fetch('/api/balance/topup', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ amount: 500, description: 'Демо-пополнение' })
+  }).then(r => r.json()).then(data => {
+    if (data.balance !== undefined) {
+      tokenBalance = Math.round(data.balance);
+      updateTokenDisplay();
+      const fly = document.createElement('div');
+      fly.className = 'token-deduct';
+      fly.style.color = 'var(--success)';
+      fly.textContent = '+500';
+      document.body.appendChild(fly);
+      setTimeout(() => fly.remove(), 1300);
+    }
+  }).catch(() => {});
 }
 
 function findBestAgent(text){
@@ -4910,7 +5120,7 @@ async function callLLM(agent, userText){
       try {
         resp = await fetch("/api/llm", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: authHeaders(),
           body: bodyPayload
         });
         break;
@@ -4945,7 +5155,7 @@ async function callLLMStream(bodyPayload) {
 
   const resp = await fetch("/api/llm/stream", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders(),
     body: bodyPayload
   });
 
@@ -5103,7 +5313,7 @@ async function translateToEnglish(text){
   try {
     const resp = await fetch("/api/llm", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders(),
       body: JSON.stringify({
         model: "deepseek/deepseek-v4-flash",
         messages: [
@@ -5502,6 +5712,10 @@ function enterApp(){
   const landing=document.getElementById('landing');
   if(landing){landing.classList.add('hidden');setTimeout(()=>{landing.style.display='none'},700)}
   document.body.classList.add('app-mode');
+  // Show auth modal if not logged in
+  if (!authToken) {
+    setTimeout(showAuthModal, 800);
+  }
 }
 
 // Smooth scroll for anchor links on landing

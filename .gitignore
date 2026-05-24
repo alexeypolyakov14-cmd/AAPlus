@@ -1,0 +1,6 @@
+node_modules/
+aaplus.db
+aaplus.db-wal
+aaplus.db-shm
+.env
+*.log
