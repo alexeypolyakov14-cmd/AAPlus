@@ -202,6 +202,17 @@ class TInvestBroker:
                 out[ticker] = out.get(ticker, 0) + qty
         return out
 
+    def trading_status(self, uid: str) -> tuple[bool, str]:
+        """(можно ли торговать через API сейчас, статус)."""
+        try:
+            r = self.call("MarketDataService/GetTradingStatus", {"instrument_id": uid})
+        except RuntimeError as e:
+            return True, f"статус недоступен: {e}"  # не блокируем: биржа сама отклонит
+        status = g(r, "trading_status", default="") or ""
+        api_ok = bool(g(r, "api_trade_available_flag", default=True))
+        ok = status == "SECURITY_TRADING_STATUS_NORMAL_TRADING" and api_ok
+        return ok, status
+
     def last_price(self, bond: Bond) -> Optional[float]:
         inst = self.instrument(bond)
         r = self.call("MarketDataService/GetLastPrices", {"instrument_id": [inst["uid"]]})
@@ -215,6 +226,9 @@ class TInvestBroker:
             inst = self.instrument(bond)
         except RuntimeError as e:
             return OrderReport(order, "rejected", message=str(e))
+        ok, status = self.trading_status(inst["uid"])
+        if not ok:
+            return OrderReport(order, "rejected", message=f"торги не идут: {status or 'нет данных'} (сессия MOEX 09:50–18:50 МСК)")
         lot = int(inst.get("lot") or 1)
         lots = max(order.qty // lot, 0)
         if lots == 0:

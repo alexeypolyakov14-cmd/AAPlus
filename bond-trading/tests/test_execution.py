@@ -73,6 +73,9 @@ def test_tinvest_broker_with_fake_transport(rows):
             if body["id"] != "SU26238RMFS4" or body["class_code"] != "TQOB":
                 raise RuntimeError("HTTP 404: not found")
             return {"instrument": {"uid": "uid-238", "figi": "BBG00", "ticker": "SU26238RMFS4", "lot": 1}}
+        if method == "MarketDataService/GetTradingStatus":
+            assert body["instrument_id"] == "uid-238"
+            return {"trading_status": "SECURITY_TRADING_STATUS_NORMAL_TRADING", "api_trade_available_flag": True}
         if method == "InstrumentsService/FindInstrument":
             return {"instruments": [{"uid": "uid-x", "isin": body["query"], "ticker": "RU000A1XXXXX", "lot": 1}]}
         if method == "OrdersService/PostOrder":
