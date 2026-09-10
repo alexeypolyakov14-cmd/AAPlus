@@ -1,0 +1,56 @@
+# Профиль ВДО (высокодоходные облигации), максимальный риск. Портфель 10–15 млн руб.
+# Ключевая идея: доход от спреда, риск — дефолты, поэтому широкая диверсификация и
+# отсечение бумаг, в цене которых рынок уже закладывает дефолт.
+# Запуск: bondtrader -c configs/hy.yaml signals
+
+data:
+  boards: [TQOB, TQCB]
+
+screener:
+  currency: SUR
+  min_ytm: 18                  # ниже — это уже не ВДО
+  max_ytm: 45
+  min_duration: 0.3
+  max_duration: 2.5            # короткие: меньше времени на ухудшение кредита, быстрее оборот
+  min_turnover: 2000000        # ≥2 млн руб./день; при позиции ~400 тыс. набор займёт ~4 дня
+  max_list_level: 3            # ВДО живут на 3-м уровне
+  exclude_floaters: true
+  exclude_linkers: true
+  max_bid_ask_pct: 1.5
+  max_g_spread_bp: 2500        # выше — рынок закладывает дефолт
+  min_price: 70                # цена ниже 70 — тоже признак дистресса
+
+risk:
+  max_weight_per_bond: 0.04       # ≈500 тыс. при 12 млн
+  max_weight_per_bond_ofz: 0.15
+  max_weight_per_issuer: 0.06     # у ВДО-эмитентов часто по 3–5 выпусков
+  max_corporate_share: 0.90       # 10% в ОФЗ — подушка ликвидности
+  min_portfolio_duration: 0.5
+  max_portfolio_duration: 2.5
+  max_g_spread_bp: 2000
+  max_turnover_share: 0.05
+  yield_vol_bp_daily: 40          # спреды ВДО ходят сильнее ОФЗ
+
+strategy:
+  name: carry
+  params:
+    top_n: 30                     # 30 позиций: один дефолт ≈ −3% портфеля
+    horizon: 1.0
+    max_duration: 2.5
+    ofz_min_share: 0.10
+  rebalance: monthly
+
+backtest:
+  commission_bp: 5
+  slippage_bp: 25                 # у ВДО реальное проскальзывание заметно выше
+  initial_cash: 12000000
+  benchmark: RUCBITR              # индекс корпоративных облигаций полной доходности
+
+execution:
+  broker: paper
+  state_path: state/portfolio_hy.json
+  journal_path: state/orders_hy.jsonl
+  tinvest:
+    sandbox: true
+    account_id: ""
+    token_env: TINVEST_TOKEN

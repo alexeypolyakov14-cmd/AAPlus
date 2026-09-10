@@ -137,10 +137,18 @@ jobs:
         run: bondtrader -c configs/moderate.yaml backtest -s carry -p top_n=4 -p ofz_min_share=1 --start 2023-01-10 --end 2025-12-30 --universe "$OFZ"
       - name: carry (ОФЗ + корпораты из текущего скрина, survivorship bias!)
         run: bondtrader -c configs/moderate.yaml backtest -s carry --start 2023-01-10 --end 2025-12-30 --auto 25 --csv nav_carry.csv
+      - name: ВДО — текущий скрин и целевой портфель (configs/hy.yaml)
+        run: |
+          bondtrader -c configs/hy.yaml screen --top 40
+          bondtrader -c configs/hy.yaml signals
+      - name: ВДО — бэктест carry (вселенная из текущего скрина, survivorship bias!)
+        run: bondtrader -c configs/hy.yaml backtest -s carry --start 2023-01-10 --end 2025-12-30 --auto 40 --csv nav_hy.csv
       - name: Бенчмарк RGBITR за тот же период
         run: bondtrader -c configs/moderate.yaml backtest -s ladder -p "edges=[100]" --start 2023-01-10 --end 2025-12-30 --universe SU26238RMFS4 | grep -E "benchmark_total_return|start|end"
       - uses: actions/upload-artifact@v4
         with:
           name: backtest-nav
-          path: bond-trading/nav_carry.csv
+          path: |
+            bond-trading/nav_carry.csv
+            bond-trading/nav_hy.csv
           if-no-files-found: ignore
