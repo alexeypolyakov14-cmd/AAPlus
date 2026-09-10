@@ -13,9 +13,17 @@ STRATEGIES = {
 
 
 def make_strategy(name: str, params: dict | None = None) -> Strategy:
+    import inspect
+    import logging
     if name not in STRATEGIES:
         raise KeyError(f"Неизвестная стратегия '{name}'. Доступные: {', '.join(STRATEGIES)}")
-    return STRATEGIES[name](**(params or {}))
+    cls = STRATEGIES[name]
+    allowed = set(inspect.signature(cls.__init__).parameters) - {"self"}
+    params = dict(params or {})
+    unknown = sorted(set(params) - allowed)
+    if unknown:
+        logging.getLogger(__name__).warning("%s: параметры %s не поддерживаются и проигнорированы", name, ", ".join(unknown))
+    return cls(**{k: v for k, v in params.items() if k in allowed})
 
 
 __all__ = [

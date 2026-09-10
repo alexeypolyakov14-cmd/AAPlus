@@ -64,3 +64,13 @@ def test_signals_trade_portfolio_cycle(capsys, cfg, tmp_path):
 def test_bad_param(capsys, cfg):
     with pytest.raises(SystemExit):
         main(["--fixtures", FIX, "-c", cfg, "signals", "-p", "oops"])
+
+
+def test_config_params_apply_only_to_same_strategy(capsys, cfg, tmp_path):
+    p = tmp_path / "carry.yaml"
+    p.write_text("strategy:\n  name: carry\n  params:\n    top_n: 3\n", encoding="utf-8")
+    out = run(capsys, "--fixtures", FIX, "-c", str(p), "signals", "-s", "ladder")
+    assert "Стратегия: ladder" in out
+    from bondtrader.strategies import make_strategy
+    st = make_strategy("ladder", {"top_n": 3, "per_bucket": 2})
+    assert st.per_bucket == 2

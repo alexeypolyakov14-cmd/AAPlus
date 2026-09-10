@@ -45,6 +45,15 @@ def _parse_params(items: Optional[list[str]]) -> dict:
     return out
 
 
+def _strategy_spec(args, settings) -> tuple[str, dict]:
+    """Имя стратегии и параметры: из конфига берём params только для стратегии с тем же именем."""
+    cfg_name = settings.get("strategy", "name", default="carry")
+    name = getattr(args, "strategy", None) or cfg_name
+    params = dict(settings.get("strategy", "params", default={}) or {}) if name == cfg_name else {}
+    params.update(_parse_params(getattr(args, "param", None)))
+    return name, params
+
+
 def _screen(snap: MarketSnapshot, settings: Settings, args) -> list[ScreenRow]:
     cfg = ScreenerConfig.from_dict(settings.get("screener", default={}))
     if getattr(args, "ofz_only", False):
@@ -183,8 +192,7 @@ def _broker_portfolio(broker, rows: list[ScreenRow], settings) -> Portfolio:
 def cmd_signals(args, settings):
     snap, rows, pf, _ = _build_context(args, settings)
     _header(snap)
-    name = args.strategy or settings.get("strategy", "name", default="carry")
-    params = {**(settings.get("strategy", "params", default={}) or {}), **_parse_params(args.param)}
+    name, params = _strategy_spec(args, settings)
     st = make_strategy(name, params)
     ctx = MarketContext(snap.settle, rows, snap.curve, snap.keyrate, pf)
     by_id = ctx.by_id
@@ -216,8 +224,7 @@ def cmd_trade(args, settings):
     from .execution.executor import Executor
     snap, rows, pf, broker = _build_context(args, settings)
     _header(snap)
-    name = args.strategy or settings.get("strategy", "name", default="carry")
-    params = {**(settings.get("strategy", "params", default={}) or {}), **_parse_params(args.param)}
+    name, params = _strategy_spec(args, settings)
     st = make_strategy(name, params)
     ctx = MarketContext(snap.settle, rows, snap.curve, snap.keyrate, pf)
     by_id = ctx.by_id
@@ -285,8 +292,7 @@ def cmd_backtest(args, settings):
     from .data.moex import MoexClient
     start = date.fromisoformat(args.start)
     end = date.fromisoformat(args.end) if args.end else date.today()
-    name = args.strategy or settings.get("strategy", "name", default="carry")
-    params = {**(settings.get("strategy", "params", default={}) or {}), **_parse_params(args.param)}
+    name, params = _strategy_spec(args, settings)
     st = make_strategy(name, params)
     if args.fixtures:
         raise SystemExit("бэктест на фикстурах не поддерживается: нужна история MOEX (без --fixtures)")
