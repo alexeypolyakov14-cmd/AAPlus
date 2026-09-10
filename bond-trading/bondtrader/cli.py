@@ -331,8 +331,9 @@ def cmd_sandbox_init(args, settings):
     from .execution.tinvest import TInvestBroker
     t = settings.get("execution", "tinvest", default={})
     br = TInvestBroker(settings.tinvest_token, sandbox=True, account_id="")
-    acc = br.sandbox_open(args.amount)
-    print(f"Открыт счёт песочницы {acc}, пополнен на {args.amount:,.0f} руб. Укажите его в config.yaml -> execution.tinvest.account_id")
+    acc = br.sandbox_open(args.amount, reuse=not args.new)
+    print(f"Счёт песочницы {acc} готов, пополнен на {args.amount:,.0f} руб. Денег на счёте: {br.cash():,.0f} руб. "
+          f"Если счетов несколько — укажите id в config.yaml -> execution.tinvest.account_id")
 
 
 def cmd_strategies(args, settings):
@@ -390,6 +391,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--curves", action="store_true", help="грузить исторические кривые zcyc с MOEX (медленнее)")
     sp.add_argument("--csv", help="сохранить NAV в CSV"); sp.add_argument("--trades", action="store_true"); sp.set_defaults(fn=cmd_backtest)
     sp = sub.add_parser("sandbox-init", parents=[common], help="открыть и пополнить счёт песочницы T-Invest"); sp.add_argument("--amount", type=float, default=1_000_000)
+    sp.add_argument("--new", action="store_true", help="открыть новый счёт, даже если уже есть открытый")
     sp.set_defaults(fn=cmd_sandbox_init)
     return p
 

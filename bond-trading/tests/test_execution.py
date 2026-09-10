@@ -86,6 +86,9 @@ def test_tinvest_broker_with_fake_transport(rows):
             return {"orders": [{"orderId": "o1"}]}
         if method == "OrdersService/CancelOrder":
             return {}
+        if method == "SandboxService/SandboxPayIn":
+            assert body["amount"]["units"] == "500000"
+            return {}
         raise AssertionError(method)
 
     br = TInvestBroker(token="", sandbox=True, post=fake_post)
@@ -96,5 +99,8 @@ def test_tinvest_broker_with_fake_transport(rows):
     assert br.cash() == pytest.approx(100000.5)
     assert br.positions() == {"SU26238RMFS4": 10}
     assert br.cancel_all() == 1
+    # sandbox_open переиспользует открытый счёт и не вызывает OpenSandboxAccount
+    assert br.sandbox_open(500_000) == "acc-1"
+    assert not any(m == "SandboxService/OpenSandboxAccount" for m, _ in calls)
     with pytest.raises(ValueError):
         TInvestBroker(token="")

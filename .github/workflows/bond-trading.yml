@@ -5,6 +5,16 @@ on:
     branches: ["**"]
     paths: ["bond-trading/**", ".github/workflows/bond-trading.yml"]
   workflow_dispatch:
+    inputs:
+      strategy:
+        description: "Стратегия для песочницы"
+        type: choice
+        default: carry
+        options: [carry, ladder, rate_cycle, spread]
+      execute:
+        description: "Реально отправить ордера в песочницу (иначе только dry-run)"
+        type: boolean
+        default: false
 
 defaults:
   run:
@@ -52,3 +62,31 @@ jobs:
           bondtrader signals -s spread
       - name: Бэктест (короткий, явная вселенная ОФЗ)
         run: bondtrader backtest -s ladder --start 2024-01-10 --end 2024-12-30 --universe SU26207RMFS9,SU26224RMFS4,SU26238RMFS4,SU26244RMFS2 --rebalance monthly --trades -v
+
+  sandbox:
+    name: Песочница T-Invest (ручной запуск, нужен секрет TINVEST_TOKEN)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    env:
+      TINVEST_TOKEN: ${{ secrets.TINVEST_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e .
+      - name: Проверка секрета
+        run: |
+          if [ -z "$TINVEST_TOKEN" ]; then echo "::error::секрет TINVEST_TOKEN не задан (Settings → Secrets and variables → Actions)"; exit 1; fi
+      - name: Счёт песочницы
+        run: bondtrader sandbox-init --amount 1000000
+      - name: Портфель до
+        run: bondtrader portfolio --broker tinvest
+      - name: Ребалансировка по стратегии ${{ inputs.strategy }} (dry-run)
+        run: bondtrader trade --broker tinvest -s ${{ inputs.strategy }}
+      - name: Ребалансировка (исполнение в песочнице)
+        if: inputs.execute
+        run: bondtrader trade --broker tinvest -s ${{ inputs.strategy }} --confirm
+      - name: Портфель после
+        if: inputs.execute
+        run: bondtrader portfolio --broker tinvest

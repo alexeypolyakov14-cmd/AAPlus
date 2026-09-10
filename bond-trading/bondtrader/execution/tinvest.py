@@ -95,10 +95,18 @@ class TInvestBroker:
         self._account = open_accs[0]["id"]
         return self._account
 
-    def sandbox_open(self, pay_in_rub: float = 0.0) -> str:
+    def sandbox_open(self, pay_in_rub: float = 0.0, reuse: bool = True) -> str:
+        """Открывает счёт песочницы (или переиспользует уже открытый) и пополняет его."""
         if not self.sandbox:
             raise RuntimeError("sandbox_open доступен только в режиме песочницы")
-        acc = self.call("SandboxService/OpenSandboxAccount", {"name": "bondtrader"}).get("accountId", "")
+        acc = ""
+        if reuse:
+            accs = self.call("UsersService/GetAccounts").get("accounts", [])
+            open_accs = [a for a in accs if a.get("status") in (None, "ACCOUNT_STATUS_OPEN")]
+            if open_accs:
+                acc = open_accs[0]["id"]
+        if not acc:
+            acc = self.call("SandboxService/OpenSandboxAccount", {"name": "bondtrader"}).get("accountId", "")
         self._account = acc
         if pay_in_rub > 0:
             self.call("SandboxService/SandboxPayIn", {"accountId": acc, "amount": {"currency": "rub", **to_quotation(pay_in_rub)}})
