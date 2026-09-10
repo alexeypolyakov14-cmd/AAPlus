@@ -50,3 +50,4 @@ execution:
     sandbox: true              # сначала всегда песочница
     account_id: ""             # пусто — возьмём первый счёт
     token_env: TINVEST_TOKEN   # имя переменной окружения с токеном
+    ca_bundle: ""              # путь к PEM-бандлу с сертификатами Минцифры (или переменная TINVEST_CA_BUNDLE)

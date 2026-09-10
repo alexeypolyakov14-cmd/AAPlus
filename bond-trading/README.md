@@ -57,6 +57,12 @@ bondtrader portfolio                             # NAV, дюрация, DV01, Va
 
 # T-Invest: песочница
 export TINVEST_TOKEN=t.xxxxx                     # токен с доступом к песочнице
+# Хосты tinkoff.ru используют сертификаты УЦ Минцифры. Если система им не доверяет
+# (ошибка CERTIFICATE_VERIFY_FAILED), соберите бандл и укажите его:
+curl -sSo /tmp/rt.crt  https://gu-st.ru/content/lending/russian_trusted_root_ca_pem.crt
+curl -sSo /tmp/sub.crt https://gu-st.ru/content/lending/russian_trusted_sub_ca_pem.crt
+cat "$(python -m certifi)" /tmp/rt.crt /tmp/sub.crt > ~/.bondtrader-ca.pem
+export TINVEST_CA_BUNDLE=~/.bondtrader-ca.pem
 bondtrader sandbox-init --amount 1000000         # открыть и пополнить счёт, id прописать в config.yaml
 bondtrader trade -s carry --broker tinvest --confirm
 bondtrader portfolio --broker tinvest

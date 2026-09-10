@@ -78,6 +78,12 @@ jobs:
       - name: Проверка секрета
         run: |
           if [ -z "$TINVEST_TOKEN" ]; then echo "::error::секрет TINVEST_TOKEN не задан (Settings → Secrets and variables → Actions)"; exit 1; fi
+      - name: Сертификаты УЦ Минцифры для хостов tinkoff.ru
+        run: |
+          curl -sSfo /tmp/russian_trusted_root_ca.crt https://gu-st.ru/content/lending/russian_trusted_root_ca_pem.crt
+          curl -sSfo /tmp/russian_trusted_sub_ca.crt  https://gu-st.ru/content/lending/russian_trusted_sub_ca_pem.crt
+          cat "$(python -m certifi)" /tmp/russian_trusted_root_ca.crt /tmp/russian_trusted_sub_ca.crt > /tmp/ca-bundle.pem
+          echo "TINVEST_CA_BUNDLE=/tmp/ca-bundle.pem" >> "$GITHUB_ENV"
       - name: Счёт песочницы
         run: bondtrader sandbox-init --amount 1000000
       - name: Портфель до

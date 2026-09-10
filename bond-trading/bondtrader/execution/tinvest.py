@@ -6,10 +6,15 @@
 
 Цены облигаций в API задаются в процентах от номинала (Quotation units/nano),
 количество — в лотах (у облигаций лот, как правило, 1 бумага).
+
+TLS: хосты *.tinkoff.ru используют сертификаты УЦ Минцифры. Если их нет в системном
+хранилище, укажите путь к бандлу (certifi + Russian Trusted Root/Sub CA) в переменной
+TINVEST_CA_BUNDLE или в config.yaml -> execution.tinvest.ca_bundle.
 """
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Callable, Optional
@@ -55,10 +60,11 @@ class TInvestBroker:
     name = "tinvest"
 
     def __init__(self, token: str, sandbox: bool = True, account_id: str = "", timeout: float = 15,
-                 post: Optional[Callable[[str, dict], dict]] = None):
+                 post: Optional[Callable[[str, dict], dict]] = None, ca_bundle: Optional[str] = None):
         if not token and post is None:
             raise ValueError("не задан токен T-Invest API (переменная окружения TINVEST_TOKEN)")
         self.token = token
+        self.verify: str | bool = ca_bundle or os.environ.get("TINVEST_CA_BUNDLE") or True
         self.sandbox = sandbox
         self.base = SANDBOX_URL if sandbox else PROD_URL
         self.timeout = timeout
@@ -70,9 +76,13 @@ class TInvestBroker:
     # ---- транспорт ----
     def _http_post(self, method: str, body: dict) -> dict:
         url = self.base + SVC + method
-        resp = requests.post(url, json=body, timeout=self.timeout,
-                             headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json",
-                                      "x-app-name": "bondtrader"})
+        try:
+            resp = requests.post(url, json=body, timeout=self.timeout, verify=self.verify,
+                                 headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json",
+                                          "x-app-name": "bondtrader"})
+        except requests.exceptions.SSLError as e:
+            raise RuntimeError("T-Invest: ошибка TLS. Хосты tinkoff.ru используют сертификаты УЦ Минцифры — "
+                               "укажите бандл в TINVEST_CA_BUNDLE (см. README). " + str(e)[:200]) from e
         if resp.status_code >= 400:
             try:
                 err = resp.json()

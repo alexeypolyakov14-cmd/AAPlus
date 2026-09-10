@@ -163,7 +163,7 @@ def _make_broker(args, settings):
         from .execution.tinvest import TInvestBroker
         t = settings.get("execution", "tinvest", default={})
         sandbox = t.get("sandbox", True) and not getattr(args, "live", False)
-        return TInvestBroker(settings.tinvest_token, sandbox=sandbox, account_id=t.get("account_id", ""))
+        return TInvestBroker(settings.tinvest_token, sandbox=sandbox, account_id=t.get("account_id", ""), ca_bundle=t.get("ca_bundle") or None)
     raise SystemExit(f"неизвестный брокер {name}")
 
 
@@ -330,7 +330,7 @@ def cmd_backtest(args, settings):
 def cmd_sandbox_init(args, settings):
     from .execution.tinvest import TInvestBroker
     t = settings.get("execution", "tinvest", default={})
-    br = TInvestBroker(settings.tinvest_token, sandbox=True, account_id="")
+    br = TInvestBroker(settings.tinvest_token, sandbox=True, account_id="", ca_bundle=t.get("ca_bundle") or None)
     acc = br.sandbox_open(args.amount, reuse=not args.new)
     print(f"Счёт песочницы {acc} готов, пополнен на {args.amount:,.0f} руб. Денег на счёте: {br.cash():,.0f} руб. "
           f"Если счетов несколько — укажите id в config.yaml -> execution.tinvest.account_id")
