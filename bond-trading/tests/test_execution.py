@@ -69,8 +69,12 @@ def test_tinvest_broker_with_fake_transport(rows):
         if method == "UsersService/GetAccounts":
             return {"accounts": [{"id": "acc-1", "status": "ACCOUNT_STATUS_OPEN"}]}
         if method == "InstrumentsService/BondBy":
-            assert body["id_type"] == "INSTRUMENT_ID_TYPE_ISIN"
+            assert body["id_type"] == "INSTRUMENT_ID_TYPE_TICKER" and body["id"] == "SU26238RMFS4"
+            if body["class_code"] != "TQOB":
+                raise RuntimeError("HTTP 404: not found")
             return {"instrument": {"uid": "uid-238", "figi": "BBG00", "ticker": "SU26238RMFS4", "lot": 1}}
+        if method == "InstrumentsService/FindInstrument":
+            return {"instruments": [{"uid": "uid-x", "isin": body["query"], "ticker": "RU000A1XXXXX", "lot": 1}]}
         if method == "OrdersService/PostOrder":
             assert body["instrument_id"] == "uid-238" and body["quantity"] == "10" and body["account_id"] == "acc-1"
             assert body["order_type"] == "ORDER_TYPE_LIMIT" and body["price"]["units"] == "53"
@@ -102,6 +106,12 @@ def test_tinvest_broker_with_fake_transport(rows):
     assert br.cash() == pytest.approx(100000.5)
     assert br.positions() == {"SU26238RMFS4": 10}
     assert br.cancel_all() == 1
+    # запасной путь: бумага не найдена по тикеру -> FindInstrument по ISIN
+    from bondtrader.models import Bond as _B
+    other = _B(secid="RU000A1XXXXX", isin="RU000A1XXXXX", board="TQCB")
+    calls.clear()
+    assert br.instrument(other)["uid"] == "uid-x"
+    assert any(m == "InstrumentsService/FindInstrument" for m, _ in calls)
     # sandbox_open переиспользует открытый счёт и не вызывает OpenSandboxAccount
     assert br.sandbox_open(500_000) == "acc-1"
     assert not any(m == "SandboxService/OpenSandboxAccount" for m, _ in calls)

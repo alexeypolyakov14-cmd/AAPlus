@@ -139,13 +139,32 @@ class TInvestBroker:
 
     # ---- инструменты ----
     def instrument(self, bond: Bond) -> dict:
+        """secid MOEX -> инструмент T-Invest (uid, figi, lot).
+
+        InstrumentIdType в API: FIGI, TICKER, UID, POSITION_UID (ISIN нет). Тикер T-Invest
+        совпадает с SECID MOEX, класс — с площадкой (TQOB/TQCB). Запасной путь — FindInstrument по ISIN.
+        """
         if bond.secid in self._by_secid:
             return self._by_secid[bond.secid]
-        body = {"id_type": "INSTRUMENT_ID_TYPE_TICKER", "class_code": bond.board or "TQOB", "id": bond.secid}
-        if bond.isin:
-            body = {"id_type": "INSTRUMENT_ID_TYPE_ISIN", "id": bond.isin}
-        inst = self.call("InstrumentsService/BondBy", body).get("instrument") or {}
-        if not inst:
+        inst: dict = {}
+        for class_code in [bond.board or "TQOB", "TQCB", "TQOB", "TQIR"]:
+            try:
+                inst = self.call("InstrumentsService/BondBy",
+                                 {"id_type": "INSTRUMENT_ID_TYPE_TICKER", "class_code": class_code, "id": bond.secid}).get("instrument") or {}
+            except RuntimeError as e:
+                log.debug("BondBy %s/%s: %s", class_code, bond.secid, e)
+                inst = {}
+            if inst:
+                break
+        if not inst and bond.isin:
+            found = self.call("InstrumentsService/FindInstrument",
+                              {"query": bond.isin, "instrument_kind": "INSTRUMENT_TYPE_BOND", "api_trade_available_flag": True})
+            cands = [c for c in (g(found, "instruments", default=[]) or []) if (c.get("isin") == bond.isin or c.get("ticker") == bond.secid)]
+            if cands:
+                inst = cands[0]
+                if not inst.get("lot"):
+                    inst = self._instrument_by_uid(inst.get("uid", "")) or inst
+        if not inst or not inst.get("uid"):
             raise RuntimeError(f"{bond.secid}: инструмент не найден в T-Invest")
         self._by_secid[bond.secid] = inst
         self._by_uid[inst.get("uid", "")] = inst
