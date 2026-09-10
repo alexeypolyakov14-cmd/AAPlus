@@ -69,8 +69,8 @@ def test_tinvest_broker_with_fake_transport(rows):
         if method == "UsersService/GetAccounts":
             return {"accounts": [{"id": "acc-1", "status": "ACCOUNT_STATUS_OPEN"}]}
         if method == "InstrumentsService/BondBy":
-            assert body["id_type"] == "INSTRUMENT_ID_TYPE_TICKER" and body["id"] == "SU26238RMFS4"
-            if body["class_code"] != "TQOB":
+            assert body["id_type"] == "INSTRUMENT_ID_TYPE_TICKER"
+            if body["id"] != "SU26238RMFS4" or body["class_code"] != "TQOB":
                 raise RuntimeError("HTTP 404: not found")
             return {"instrument": {"uid": "uid-238", "figi": "BBG00", "ticker": "SU26238RMFS4", "lot": 1}}
         if method == "InstrumentsService/FindInstrument":
