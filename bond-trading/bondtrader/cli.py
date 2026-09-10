@@ -317,7 +317,8 @@ def cmd_backtest(args, settings):
                          rebalance=args.rebalance or settings.get("strategy", "rebalance", default="monthly"),
                          screener_cfg=ScreenerConfig.from_dict({**settings.get("screener", default={}), "min_turnover": 0, "max_bid_ask_pct": 100}),
                          risk_limits=RiskLimits.from_dict(settings.get("risk", default={})),
-                         benchmark=None if (args.benchmark or "").lower() == "none" else (args.benchmark or settings.get("backtest", "benchmark", default="RGBITR")))
+                         benchmark=None if (args.benchmark or "").lower() == "none" else (args.benchmark or settings.get("backtest", "benchmark", default="RGBITR")),
+                         cash_spread_bp=settings.get("backtest", "cash_spread_bp", default=-50))
     res = eng.run()
     print(f"Стратегия {name} {params or ''}, {start} — {end}, ребалансировка {eng.rebalance}, бумаг {len(bonds)}\n")
     for k, v in res.summary().items():

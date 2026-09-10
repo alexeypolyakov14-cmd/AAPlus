@@ -42,6 +42,7 @@ backtest:
   slippage_bp: 5
   initial_cash: 12000000
   benchmark: RGBITR
+  cash_spread_bp: -50          # свободные деньги: ключевая ставка − 0.5 п.п. (фонд ликвидности)
 
 execution:
   broker: paper

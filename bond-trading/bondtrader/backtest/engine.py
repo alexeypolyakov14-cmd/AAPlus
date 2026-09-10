@@ -51,10 +51,13 @@ class BacktestResult:
     coupons_received: float = 0.0
     commissions_paid: float = 0.0
     regimes: dict[date, str] = field(default_factory=dict)
+    cash_income: float = 0.0
+    avg_invested: float = 0.0
 
     def summary(self) -> dict:
         d = self.stats.as_dict()
         d.update({"trades": len(self.trades), "coupons_received": round(self.coupons_received, 2),
+                  "cash_income": round(self.cash_income, 2), "avg_invested_pct": round(self.avg_invested * 100, 1),
                   "commissions_paid": round(self.commissions_paid, 2)})
         return d
 
@@ -78,7 +81,7 @@ class BacktestEngine:
                  initial_cash: float = 1_000_000, commission_bp: float = 5, slippage_bp: float = 5,
                  rebalance: str = "monthly", screener_cfg: Optional[ScreenerConfig] = None,
                  risk_limits: Optional[RiskLimits] = None, benchmark: Optional[str] = "RGBITR",
-                 spread_history_len: int = 60):
+                 spread_history_len: int = 60, cash_spread_bp: float = -50.0):
         self.strategy = strategy
         self.bonds = {b.secid: b for b in bonds}
         self.provider = provider
@@ -91,6 +94,7 @@ class BacktestEngine:
         self.risk = RiskManager(risk_limits or RiskLimits())
         self.benchmark_name = benchmark
         self.spread_history_len = spread_history_len
+        self.cash_spread_bp = cash_spread_bp   # доходность свободных денег = ключевая ставка + спред (фонд ликвидности/РЕПО)
 
     # ---- загрузка ----
     def _load(self) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
@@ -139,10 +143,20 @@ class BacktestEngine:
         spread_hist: dict[str, list[float]] = {}
         prev_ts: Optional[pd.Timestamp] = None
         last_face: dict[str, float] = {}
+        cash_income = 0.0
+        invested_share: list[float] = []
 
         for ts in cal:
             today = ts.date()
             prev_day = prev_ts.date() if prev_ts is not None else None
+            # 0) доход на свободные деньги за прошедшие календарные дни
+            if prev_day is not None and pf.cash > 0:
+                rate = self._keyrate_on(keyrate, today)
+                if rate is not None:
+                    r = max((rate + self.cash_spread_bp / 100) / 100, 0.0)  # деньги не могут приносить отрицательный доход
+                    inc = pf.cash * ((1 + r) ** ((today - prev_day).days / 365) - 1)
+                    pf.cash += inc
+                    cash_income += inc
             # 1) купоны / амортизации / погашения
             for secid in list(pf.positions):
                 bond = self.bonds[secid]
@@ -178,6 +192,8 @@ class BacktestEngine:
 
             nav = pf.nav(marks)
             nav_rows.append((ts, nav))
+            if nav > 0:
+                invested_share.append(1 - pf.cash / nav)
 
             # 3) ребалансировка
             if _is_rebalance_day(ts, prev_ts, self.rebalance) and universe:
@@ -223,7 +239,8 @@ class BacktestEngine:
                 log.warning("бенчмарк %s недоступен: %s", self.benchmark_name, e)
         rf = (sum(r for _, r in keyrate) / len(keyrate)) if keyrate else 0.0
         stats = performance(nav_s, rf_annual_pct=rf, benchmark=bench)
-        return BacktestResult(nav_s, trades, stats, bench, weights_hist, pf, pf.coupons_received, pf.commissions_paid, regimes)
+        return BacktestResult(nav_s, trades, stats, bench, weights_hist, pf, pf.coupons_received, pf.commissions_paid, regimes,
+                              cash_income, (sum(invested_share) / len(invested_share)) if invested_share else 0.0)
 
     # ---- вспомогательные ----
     def _curve(self, universe: list[tuple[Bond, Quote]], today: date) -> Optional[ZeroCurve]:
@@ -247,6 +264,16 @@ class BacktestEngine:
             return ZeroCurve.from_ofz_metrics(items, today)
         except ValueError:
             return None
+
+    @staticmethod
+    def _keyrate_on(history: list[tuple[date, float]], today: date) -> Optional[float]:
+        rate = None
+        for d, r in history:
+            if d <= today:
+                rate = r
+            else:
+                break
+        return rate
 
     @staticmethod
     def _keyrate_view(history: list[tuple[date, float]], today: date) -> Optional[KeyRateView]:

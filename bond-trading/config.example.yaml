@@ -41,6 +41,7 @@ backtest:
   slippage_bp: 5
   initial_cash: 1000000
   benchmark: RGBITR            # RGBITR — ОФЗ полной доходности, RUCBITR — корпораты
+  cash_spread_bp: -50          # свободные деньги: ключевая ставка − 0.5 п.п. (фонд ликвидности)
 
 execution:
   broker: paper                # paper | tinvest

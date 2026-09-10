@@ -143,8 +143,11 @@ jobs:
           bondtrader -c configs/hy.yaml signals
       - name: ВДО — бэктест carry (вселенная из текущего скрина, survivorship bias!)
         run: bondtrader -c configs/hy.yaml backtest -s carry --start 2023-01-10 --end 2025-12-30 --auto 40 --csv nav_hy.csv
-      - name: Бенчмарк RGBITR за тот же период
-        run: bondtrader -c configs/moderate.yaml backtest -s ladder -p "edges=[100]" --start 2023-01-10 --end 2025-12-30 --universe SU26238RMFS4 | grep -E "benchmark_total_return|start|end"
+      - name: Бенчмарки за тот же период (RGBITR — ОФЗ, RUCBITR — корпораты, RUCBHYTR — ВДО)
+        run: |
+          for ix in RGBITR RUCBITR RUCBHYTR RUCBCPNS; do
+            echo "== $ix"; bondtrader -c configs/moderate.yaml backtest -s ladder -p "edges=[100]" --start 2023-01-10 --end 2025-12-30 --universe SU26238RMFS4 --benchmark $ix | grep -E "benchmark_total_return" || true
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: backtest-nav

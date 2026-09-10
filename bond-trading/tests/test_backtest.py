@@ -104,6 +104,13 @@ def test_backtest_ladder_with_coupons_and_maturity(world):
     assert res.regimes and set(res.regimes.values()) <= {"easing", "hold", "tightening"}
     summ = res.summary()
     assert summ["trades"] == len(res.trades)
+    assert res.cash_income > 0 and 0 < res.avg_invested <= 1
+    # без дохода на кэш итог ниже
+    eng0 = BacktestEngine(make_strategy("ladder", {"edges": [1, 3], "per_bucket": 1}), bonds, provider, START, END,
+                          initial_cash=1_000_000, rebalance="monthly", cash_spread_bp=-100000,  # -> ставка на кэш 0%
+                          screener_cfg=ScreenerConfig(min_turnover=0, max_bid_ask_pct=100, max_duration=20),
+                          risk_limits=RiskLimits(max_weight_per_bond=1.0, max_portfolio_duration=20))
+    assert eng0.run().nav.iloc[-1] < res.nav.iloc[-1]
 
 
 def test_backtest_rate_cycle_extends_duration_on_easing(world):

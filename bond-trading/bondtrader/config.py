@@ -51,6 +51,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "slippage_bp": 5,
         "initial_cash": 1_000_000,
         "benchmark": "RGBITR",
+        "cash_spread_bp": -50,
     },
     "execution": {
         "broker": "paper",
