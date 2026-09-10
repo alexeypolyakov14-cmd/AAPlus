@@ -1,0 +1,53 @@
+# Умеренный профиль для портфеля 10–15 млн руб.: carry + roll-down, ядро из ОФЗ,
+# корпораты только 1–2 уровня листинга, до 12 позиций.
+# Запуск: bondtrader -c configs/moderate.yaml signals
+
+data:
+  boards: [TQOB, TQCB]
+
+screener:
+  currency: SUR
+  min_duration: 0.3
+  max_duration: 6.0
+  min_turnover: 5000000        # ≥5 млн руб./день: при позиции ~1 млн ордер не двигает рынок
+  max_list_level: 2
+  exclude_floaters: true
+  exclude_linkers: true
+  max_bid_ask_pct: 0.7
+  max_g_spread_bp: 800
+  min_price: 60
+
+risk:
+  max_weight_per_bond: 0.08       # корпоративная бумага ≤ 8% (≈1 млн при 12 млн)
+  max_weight_per_bond_ofz: 0.25
+  max_weight_per_issuer: 0.15
+  max_corporate_share: 0.55
+  min_portfolio_duration: 1.0
+  max_portfolio_duration: 4.5
+  max_g_spread_bp: 600            # без «мусорных» спредов
+  max_turnover_share: 0.05
+  yield_vol_bp_daily: 15
+
+strategy:
+  name: carry
+  params:
+    top_n: 12
+    horizon: 1.0
+    max_duration: 5.0
+    ofz_min_share: 0.45
+  rebalance: monthly
+
+backtest:
+  commission_bp: 5
+  slippage_bp: 5
+  initial_cash: 12000000
+  benchmark: RGBITR
+
+execution:
+  broker: paper
+  state_path: state/portfolio.json
+  journal_path: state/orders.jsonl
+  tinvest:
+    sandbox: true
+    account_id: ""
+    token_env: TINVEST_TOKEN

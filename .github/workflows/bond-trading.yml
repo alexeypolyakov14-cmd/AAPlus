@@ -15,6 +15,10 @@ on:
         description: "Реально отправить ордера в песочницу (иначе только dry-run)"
         type: boolean
         default: false
+      backtest:
+        description: "Сравнительный бэктест стратегий 2023–2025"
+        type: boolean
+        default: false
 
 defaults:
   run:
@@ -111,3 +115,32 @@ jobs:
       - name: Портфель после
         if: inputs.execute
         run: bondtrader portfolio --broker tinvest
+
+  backtest-compare:
+    name: Сравнение стратегий 2023–2025 (ручной запуск)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.backtest
+    env:
+      # ОФЗ-ПД, торговавшиеся на начало 2023 (более поздние выпуски подключаются с даты появления истории)
+      OFZ: SU26229RMFS3,SU26207RMFS9,SU26232RMFS7,SU26236RMFS9,SU26224RMFS4,SU26241RMFS8,SU26240RMFS0,SU26238RMFS4,SU26243RMFS4,SU26244RMFS2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e .
+      - name: ladder (ОФЗ, корзины 1/2/3/5 лет)
+        run: bondtrader -c configs/moderate.yaml backtest -s ladder -p "edges=[1,2,3,5]" -p per_bucket=1 --start 2023-01-10 --end 2025-12-30 --universe "$OFZ"
+      - name: rate_cycle (ОФЗ, дюрация по фазе ЦБ)
+        run: bondtrader -c configs/moderate.yaml backtest -s rate_cycle -p top_n=3 --start 2023-01-10 --end 2025-12-30 --universe "$OFZ" --trades
+      - name: carry (ОФЗ)
+        run: bondtrader -c configs/moderate.yaml backtest -s carry -p top_n=4 -p ofz_min_share=1 --start 2023-01-10 --end 2025-12-30 --universe "$OFZ"
+      - name: carry (ОФЗ + корпораты из текущего скрина, survivorship bias!)
+        run: bondtrader -c configs/moderate.yaml backtest -s carry --start 2023-01-10 --end 2025-12-30 --auto 25 --csv nav_carry.csv
+      - name: Бенчмарк RGBITR за тот же период
+        run: bondtrader -c configs/moderate.yaml backtest -s ladder -p "edges=[100]" --start 2023-01-10 --end 2025-12-30 --universe SU26238RMFS4 | grep -E "benchmark_total_return|start|end"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backtest-nav
+          path: bond-trading/nav_carry.csv
+          if-no-files-found: ignore
