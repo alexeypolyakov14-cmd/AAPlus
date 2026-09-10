@@ -80,10 +80,25 @@ jobs:
           if [ -z "$TINVEST_TOKEN" ]; then echo "::error::секрет TINVEST_TOKEN не задан (Settings → Secrets and variables → Actions)"; exit 1; fi
       - name: Сертификаты УЦ Минцифры для хостов tinkoff.ru
         run: |
-          curl -sSfo /tmp/russian_trusted_root_ca.crt https://gu-st.ru/content/lending/russian_trusted_root_ca_pem.crt
-          curl -sSfo /tmp/russian_trusted_sub_ca.crt  https://gu-st.ru/content/lending/russian_trusted_sub_ca_pem.crt
-          cat "$(python -m certifi)" /tmp/russian_trusted_root_ca.crt /tmp/russian_trusted_sub_ca.crt > /tmp/ca-bundle.pem
+          set -e
+          cp "$(python -m certifi)" /tmp/ca-bundle.pem
+          for name in russian_trusted_root_ca russian_trusted_sub_ca; do
+            curl -sSfLo /tmp/$name.raw "https://gu-st.ru/content/lending/${name}_pem.crt"
+            echo "== $name: $(file -b /tmp/$name.raw | cut -c1-60)"
+            if grep -q "BEGIN CERTIFICATE" /tmp/$name.raw; then
+              openssl x509 -in /tmp/$name.raw -inform PEM -out /tmp/$name.pem
+            else
+              openssl x509 -in /tmp/$name.raw -inform DER -out /tmp/$name.pem
+            fi
+            openssl x509 -in /tmp/$name.pem -noout -subject -enddate
+            printf '\n' >> /tmp/ca-bundle.pem
+            cat /tmp/$name.pem >> /tmp/ca-bundle.pem
+          done
+          python -c "import ssl; c=ssl.create_default_context(); c.load_verify_locations('/tmp/ca-bundle.pem'); print('бандл загружен, сертификатов:', len(c.get_ca_certs()))"
           echo "TINVEST_CA_BUNDLE=/tmp/ca-bundle.pem" >> "$GITHUB_ENV"
+      - name: Проверка TLS до песочницы
+        run: |
+          echo | openssl s_client -connect sandbox-invest-public-api.tinkoff.ru:443 -servername sandbox-invest-public-api.tinkoff.ru -CAfile /tmp/ca-bundle.pem 2>/dev/null | grep -E "Verify return code|issuer=|subject=" || true
       - name: Счёт песочницы
         run: bondtrader sandbox-init --amount 1000000
       - name: Портфель до
