@@ -19,7 +19,7 @@ class SpreadMeanReversionStrategy(Strategy):
     name = "spread"
 
     def __init__(self, entry_z: float = 1.0, exit_z: float = 0.0, top_n: int = 8, min_history: int = 40,
-                 edges=None, ofz_anchor: float = 0.3, max_spread_bp: float = 600):
+                 edges=None, ofz_anchor: float = 0.3, max_spread_bp: float = 600, min_group: int = 6, z_cap: float = 5.0):
         self.entry_z = entry_z
         self.exit_z = exit_z
         self.top_n = top_n
@@ -27,6 +27,8 @@ class SpreadMeanReversionStrategy(Strategy):
         self.edges = list(edges or [1.0, 2.0, 3.0, 5.0])
         self.ofz_anchor = ofz_anchor
         self.max_spread_bp = max_spread_bp
+        self.min_group = min_group
+        self.z_cap = z_cap
         self._reasons: dict[str, str] = {}
 
     def zscores(self, ctx: MarketContext) -> dict[str, float]:
@@ -35,11 +37,18 @@ class SpreadMeanReversionStrategy(Strategy):
         for r in corp:
             key = (duration_bucket(r.metrics.macaulay_duration, self.edges), r.bond.list_level or 0)
             groups.setdefault(key, []).append(r)
+        # маленькие группы сравниваем со всем корпоративным сегментом, иначе MAD вырождается
+        all_spreads = [r.metrics.g_spread for r in corp]
+        all_med = statistics.median(all_spreads) if all_spreads else 0.0
+        all_mad = statistics.median(abs(s - all_med) for s in all_spreads) * 1.4826 if len(all_spreads) > 2 else 0.0
         z: dict[str, float] = {}
         for key, rows in groups.items():
             spreads = [r.metrics.g_spread for r in rows]
-            med = statistics.median(spreads)
-            mad = statistics.median(abs(s - med) for s in spreads) * 1.4826 if len(spreads) > 2 else 0.0
+            if len(spreads) >= self.min_group:
+                med = statistics.median(spreads)
+                mad = statistics.median(abs(s - med) for s in spreads) * 1.4826
+            else:
+                med, mad = all_med, all_mad
             for r in rows:
                 hist = ctx.spread_history.get(r.secid)
                 if hist and len(hist) >= self.min_history:
@@ -50,6 +59,7 @@ class SpreadMeanReversionStrategy(Strategy):
                     z[r.secid] = (r.metrics.g_spread - med) / mad
                 else:
                     z[r.secid] = 0.0
+                z[r.secid] = max(-self.z_cap, min(self.z_cap, z[r.secid]))
         return z
 
     def targets(self, ctx: MarketContext) -> dict[str, float]:
