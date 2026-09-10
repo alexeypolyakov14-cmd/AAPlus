@@ -1,0 +1,188 @@
+import json
+import os
+from datetime import date
+
+import pytest
+
+from bondtrader.analytics.curve import ZeroCurve
+from bondtrader.data.cbr import KeyRateView
+from bondtrader.data.moex import parse_board_securities
+from bondtrader.portfolio import Fill, Portfolio
+from bondtrader.risk import RiskLimits, RiskManager, orders_from_targets
+from bondtrader.screener import Screener, ScreenerConfig, build_curve, to_dataframe
+from bondtrader.strategies import MarketContext, Side, make_strategy
+
+FIX = os.path.join(os.path.dirname(__file__), "fixtures")
+SETTLE = date(2025, 6, 2)
+
+
+def load(name):
+    with open(os.path.join(FIX, name), encoding="utf-8") as f:
+        return json.load(f)
+
+
+@pytest.fixture
+def universe():
+    return parse_board_securities(load("bonds_board.json"), SETTLE)
+
+
+@pytest.fixture
+def curve():
+    return ZeroCurve.from_moex_zcyc(load("zcyc.json"))
+
+
+@pytest.fixture
+def rows(universe, curve):
+    return Screener(ScreenerConfig(min_turnover=1e6, max_list_level=2, max_bid_ask_pct=1.0)).run(universe, curve, SETTLE)
+
+
+def test_screener_filters(universe, curve):
+    s = Screener(ScreenerConfig(min_turnover=1e6, max_list_level=2))
+    rows = s.run(universe, curve, SETTLE)
+    ids = {r.secid for r in rows}
+    assert "SU29014RMFS6" not in ids and s.rejected["SU29014RMFS6"] == "флоатер"
+    assert "SU52002RMFS1" not in ids and s.rejected["SU52002RMFS1"] == "линкер"
+    assert "RU000A1090Y7" not in ids and s.rejected["RU000A1090Y7"].startswith("листинг")
+    assert "XS0000000001" not in ids
+    assert "RU000A100XY9" not in ids and s.rejected["RU000A100XY9"].startswith("валюта")
+    assert "RU000A100AMR" not in ids and s.rejected["RU000A100AMR"] == "широкий bid/ask"
+    assert "RU000A105XX1" not in ids  # спред 2500 б.п. -> дистресс
+    assert "SU26234RMFS3" not in ids  # дюрация < 0.2
+    assert "SU26238RMFS4" in ids and "RU000A104ZK2" in ids
+    assert rows == sorted(rows, key=lambda r: r.score, reverse=True)
+    df = to_dataframe(rows)
+    assert {"secid", "ytm", "duration", "g_spread", "score"} <= set(df.columns)
+    mts = next(r for r in rows if r.secid == "RU000A104ZK2")
+    assert "оферта" in mts.flags and mts.metrics.ytm_to_offer is not None
+    # у корпоратов положительный G-спред, у ОФЗ около нуля
+    ofz = [r for r in rows if r.bond.is_ofz]
+    corp = [r for r in rows if not r.bond.is_ofz]
+    assert all(abs(r.metrics.g_spread) < 60 for r in ofz)
+    assert all(r.metrics.g_spread > 0 for r in corp)
+
+
+def test_build_curve_fallback(universe):
+    c = build_curve(universe, SETTLE, zcyc_payload=None)
+    assert c.source == "ofz_fit" and len(c) >= 3
+    assert c.yield_at(1) > c.yield_at(10)   # инверсия, как в фикстуре
+    c2 = build_curve(universe, SETTLE, zcyc_payload=load("zcyc.json"))
+    assert c2.source == "moex_zcyc"
+
+
+def test_ladder_strategy(rows, curve):
+    st = make_strategy("ladder", {"edges": [1, 2, 3, 5], "per_bucket": 1})
+    ctx = MarketContext(SETTLE, rows, curve)
+    w = st.targets(ctx)
+    assert w and abs(sum(w.values()) - 1.0) < 1e-9
+    durs = sorted(ctx.by_id[s].metrics.macaulay_duration for s in w)
+    assert len(w) == 5 and durs[0] < 1 and durs[-1] >= 5
+    sig = st.generate(ctx)
+    assert all(s.side == Side.BUY for s in sig)
+    # удержание: купленные бумаги остаются
+    pf = Portfolio(cash=0)
+    first = next(iter(w))
+    pf.apply_fill(Fill(first, "BUY", 10, 90, 1, 1000))
+    ctx2 = MarketContext(SETTLE, rows, curve, portfolio=pf)
+    assert first in st.targets(ctx2)
+    assert any(s.side == Side.HOLD and s.secid == first for s in st.generate(ctx2))
+
+
+def test_spread_strategy_cross_section_and_history(rows, curve):
+    st = make_strategy("spread", {"entry_z": 0.5, "exit_z": -0.5, "top_n": 3, "ofz_anchor": 0.3})
+    ctx = MarketContext(SETTLE, rows, curve)
+    z = st.zscores(ctx)
+    assert z and all(not ctx.by_id[s].bond.is_ofz for s in z)
+    w = st.targets(ctx)
+    ofz_w = sum(v for s, v in w.items() if ctx.by_id[s].bond.is_ofz)
+    assert ofz_w == pytest.approx(0.3)
+    # временная z-оценка: история узких спредов делает текущий спред «широким»
+    wide = "RU000A103WV8"
+    ctx_h = MarketContext(SETTLE, rows, curve, spread_history={wide: [100.0] * 50 + [120.0] * 10})
+    z2 = st.zscores(ctx_h)
+    assert z2[wide] > 3
+    # выход: держим бумагу, чей спред «сжался» (история широких спредов)
+    pf = Portfolio(cash=0)
+    pf.apply_fill(Fill(wide, "BUY", 5, 88, 14, 1000))
+    ctx_x = MarketContext(SETTLE, rows, curve, portfolio=pf, spread_history={wide: [1900.0, 2100.0] * 30})
+    sig = st.generate(ctx_x)
+    assert any(s.secid == wide and s.side == Side.SELL for s in sig)
+
+
+def test_rate_cycle_strategy(rows, curve):
+    st = make_strategy("rate_cycle", {"top_n": 2})
+    easing = KeyRateView(20.0, date(2025, 6, 6), -1.0, 1, "easing", 21, 16)
+    tight = KeyRateView(21.0, date(2025, 5, 1), 2.0, 3, "tightening", 21, 16)
+    hold = KeyRateView(21.0, date(2024, 10, 28), 2.0, 3, "hold", 21, 16)
+    d_e = st.target_duration(MarketContext(SETTLE, rows, curve, easing))[0]
+    d_t = st.target_duration(MarketContext(SETTLE, rows, curve, tight))[0]
+    d_h = st.target_duration(MarketContext(SETTLE, rows, curve, hold))[0]
+    assert d_t < d_h < d_e
+    assert d_h == st.mid_long_dur  # кривая в фикстуре инвертирована
+    w = st.targets(MarketContext(SETTLE, rows, curve, easing))
+    assert w and all(rows_by := MarketContext(SETTLE, rows, curve).by_id[s].bond.is_ofz for s in w)
+    avg_dur = sum(w[s] * MarketContext(SETTLE, rows, curve).by_id[s].metrics.macaulay_duration for s in w)
+    w_t = st.targets(MarketContext(SETTLE, rows, curve, tight))
+    avg_dur_t = sum(w_t[s] * MarketContext(SETTLE, rows, curve).by_id[s].metrics.macaulay_duration for s in w_t)
+    assert avg_dur > avg_dur_t
+    # без данных по ставке — режим hold, стратегия всё равно работает
+    assert st.targets(MarketContext(SETTLE, rows, curve, None))
+
+
+def test_carry_strategy_and_ofz_floor(rows, curve):
+    st = make_strategy("carry", {"top_n": 4, "max_duration": 5, "ofz_min_share": 0.4})
+    ctx = MarketContext(SETTLE, rows, curve)
+    er = st.expected_returns(ctx)
+    assert all(ctx.by_id[s].metrics.macaulay_duration <= 5 for s in er)
+    w = st.targets(ctx)
+    assert abs(sum(w.values()) - 1.0) < 1e-9 and len(w) == 4
+    ofz_share = sum(v for s, v in w.items() if ctx.by_id[s].bond.is_ofz)
+    assert ofz_share >= 0.4 - 1e-9
+    assert all("E[R]" in r for r in st.explain(ctx).values())
+
+
+def test_risk_enforce_and_orders(rows):
+    by_id = {r.secid: r for r in rows}
+    rm = RiskManager(RiskLimits(max_weight_per_bond=0.25, max_weight_per_issuer=0.3, max_corporate_share=0.5))
+    corp = [s for s in by_id if not by_id[s].bond.is_ofz][:3]
+    targets = {corp[0]: 0.5, corp[1]: 0.3, corp[2]: 0.2}
+    w, notes = rm.enforce_targets(targets, by_id)
+    assert max(w.values()) <= 0.25 + 1e-9
+    assert sum(w.values()) <= 0.5 + 1e-9
+    assert any(n.code == "bond_cap" for n in notes) and any(n.code == "corp_share" for n in notes)
+    # ордера из целей
+    pf = Portfolio(cash=1_000_000)
+    orders = orders_from_targets(pf, w, by_id, strategy="test")
+    assert orders and all(o.side == "BUY" for o in orders)
+    spent = sum(o.qty * by_id[o.secid].metrics.dirty_price for o in orders)
+    assert spent <= 1_000_000 * 0.5 + 1e-6
+    assert not [v for v in rm.check_orders(orders, by_id, pf, 1_000_000) if v.hard]
+    # исполняем и проверяем риск-метрики
+    for o in orders:
+        r = by_id[o.secid]
+        pf.apply_fill(Fill(o.secid, o.side, o.qty, o.price, r.quote.accrued, r.bond.face_value, commission=10))
+    risk = rm.portfolio_risk(pf, by_id)
+    assert risk.nav == pytest.approx(1_000_000 - 10 * len(orders), rel=1e-6)
+    assert risk.dv01 > 0 and risk.var_1d_95 > 0 and 0 < risk.corporate_share <= 0.5 + 1e-6
+    # продажа всего -> SELL ордера первыми и ошибка при коротких продажах
+    sells = orders_from_targets(pf, {}, by_id)
+    assert sells and all(o.side == "SELL" for o in sells)
+    from bondtrader.portfolio import Order
+    bad = rm.check_orders([Order("SU26238RMFS4", "SELL", 5)], by_id, Portfolio(cash=0), 1)
+    assert any(v.code == "short" for v in bad)
+
+
+def test_portfolio_accounting():
+    pf = Portfolio(cash=100_000)
+    pf.apply_fill(Fill("A", "BUY", 10, 95.0, 5.0, 1000, commission=5))
+    assert pf.cash == pytest.approx(100_000 - 10 * 955 - 5)
+    pf.apply_fill(Fill("A", "BUY", 10, 97.0, 5.0, 1000))
+    assert pf.positions["A"].avg_price == pytest.approx(96.0)
+    pf.apply_coupon("A", 40)
+    assert pf.coupons_received == 800
+    pf.apply_fill(Fill("A", "SELL", 5, 98.0, 1.0, 1000))
+    assert pf.realized_pnl == pytest.approx(5 * 1000 * 0.02)
+    pf.apply_redemption("A", 1000, full=True)
+    assert "A" not in pf.positions
+    assert pf.nav({}) == pytest.approx(pf.cash)
+    d = pf.to_dict()
+    assert Portfolio.from_dict(d).cash == pf.cash

@@ -1,0 +1,52 @@
+# Пример конфигурации bondtrader. Скопируйте в config.yaml и правьте.
+data:
+  boards: [TQOB, TQCB]         # TQOB — ОФЗ/субфеды, TQCB — корпоративные
+  cache_path: data/cache/http_cache.sqlite
+
+screener:
+  currency: SUR
+  min_ytm: 0
+  max_ytm: 40
+  min_duration: 0.2            # лет
+  max_duration: 12
+  min_turnover: 1000000        # руб./день — отсекаем неликвид
+  max_list_level: 2            # уровень листинга MOEX (1 — самый надёжный)
+  exclude_floaters: true
+  exclude_linkers: true
+  exclude_amortization: false
+  exclude_offers: false
+  max_bid_ask_pct: 1.0
+  max_g_spread_bp: 1500        # выше — дистресс, не наш профиль
+  min_price: 50
+  issuer_blacklist: []
+
+risk:
+  max_weight_per_bond: 0.10       # корпоративная бумага
+  max_weight_per_bond_ofz: 0.35   # выпуск ОФЗ
+  max_weight_per_issuer: 0.20
+  max_corporate_share: 0.60
+  min_portfolio_duration: 0.5
+  max_portfolio_duration: 6.0
+  max_g_spread_bp: 800
+  max_turnover_share: 0.05     # наш ордер не больше 5% дневного оборота
+  yield_vol_bp_daily: 15       # для параметрического VaR
+
+strategy:
+  name: carry                  # ladder | spread | rate_cycle | carry
+  params: {}
+  rebalance: monthly
+
+backtest:
+  commission_bp: 5
+  slippage_bp: 5
+  initial_cash: 1000000
+  benchmark: RGBITR            # RGBITR — ОФЗ полной доходности, RUCBITR — корпораты
+
+execution:
+  broker: paper                # paper | tinvest
+  state_path: state/portfolio.json
+  journal_path: state/orders.jsonl
+  tinvest:
+    sandbox: true              # сначала всегда песочница
+    account_id: ""             # пусто — возьмём первый счёт
+    token_env: TINVEST_TOKEN   # имя переменной окружения с токеном

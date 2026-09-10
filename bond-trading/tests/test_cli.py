@@ -1,0 +1,66 @@
+import os
+
+import pytest
+
+from bondtrader.cli import main
+
+FIX = os.path.join(os.path.dirname(__file__), "fixtures")
+
+
+@pytest.fixture
+def cfg(tmp_path):
+    p = tmp_path / "config.yaml"
+    p.write_text(f"""
+execution:
+  broker: paper
+  state_path: {tmp_path / 'pf.json'}
+  journal_path: {tmp_path / 'orders.jsonl'}
+backtest:
+  initial_cash: 2000000
+risk:
+  max_weight_per_bond: 0.3
+""", encoding="utf-8")
+    return str(p)
+
+
+def run(capsys, *argv):
+    assert main(list(argv)) == 0
+    return capsys.readouterr().out
+
+
+def test_screen_and_info_commands(capsys, cfg):
+    out = run(capsys, "--fixtures", FIX, "-c", cfg, "screen", "--top", "5")
+    assert "SU26" in out and "g_spread" in out
+    out = run(capsys, "screen", "--fixtures", FIX, "-c", cfg, "--ofz-only", "-v")
+    assert "RU000A" not in out
+    out = run(capsys, "--fixtures", FIX, "-c", cfg, "curve")
+    assert "Наклон" in out
+    out = run(capsys, "--fixtures", FIX, "-c", cfg, "keyrate")
+    assert "Ключевая ставка: 21.00%" in out
+    out = run(capsys, "--fixtures", FIX, "-c", cfg, "bond", "SU26238RMFS4")
+    assert "ОФЗ 26238" in out and "DV01" in out
+    out = run(capsys, "strategies")
+    assert "ladder" in out and "rate_cycle" in out
+
+
+def test_signals_trade_portfolio_cycle(capsys, cfg, tmp_path):
+    out = run(capsys, "--fixtures", FIX, "-c", cfg, "signals", "-s", "ladder", "-p", "per_bucket=1", "-p", "edges=[1,2,3]")
+    assert "Ордера относительно текущего портфеля" in out and "BUY" in out
+    out = run(capsys, "--fixtures", FIX, "-c", cfg, "trade", "-s", "ladder", "-p", "per_bucket=1")
+    assert "DRY-RUN" in out
+    assert not (tmp_path / "pf.json").exists()
+    out = run(capsys, "--fixtures", FIX, "-c", cfg, "trade", "-s", "ladder", "-p", "per_bucket=1", "--confirm")
+    assert "filled" in out and (tmp_path / "pf.json").exists()
+    out = run(capsys, "--fixtures", FIX, "-c", cfg, "portfolio")
+    assert "NAV" in out and "DV01" in out and "Экспозиция по эмитентам" in out
+    # повторный запуск — ребалансировка не нужна
+    out = run(capsys, "--fixtures", FIX, "-c", cfg, "trade", "-s", "ladder", "-p", "per_bucket=1")
+    assert "Ребалансировка не требуется" in out
+    # смена стратегии -> продажи идут первыми
+    out = run(capsys, "--fixtures", FIX, "-c", cfg, "signals", "-s", "rate_cycle")
+    assert "SELL" in out
+
+
+def test_bad_param(capsys, cfg):
+    with pytest.raises(SystemExit):
+        main(["--fixtures", FIX, "-c", cfg, "signals", "-p", "oops"])

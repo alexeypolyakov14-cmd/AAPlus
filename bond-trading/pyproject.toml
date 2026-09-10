@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bondtrader"
+version = "0.1.0"
+description = "Торговая система для облигаций российского рынка (MOEX): данные, скринер, стратегии, бэктест, исполнение через T-Invest API"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31",
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+bondtrader = "bondtrader.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["bondtrader*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

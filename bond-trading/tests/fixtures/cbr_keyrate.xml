@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?><soap:Envelope><soap:Body><KeyRateXMLResponse><KeyRateXMLResult><KeyRate>
+<KR><DT>2024-10-28T00:00:00+03:00</DT><Rate>21.00</Rate></KR>
+<KR><DT>2024-09-16T00:00:00+03:00</DT><Rate>19.00</Rate></KR>
+<KR><DT>2024-07-29T00:00:00+03:00</DT><Rate>18.00</Rate></KR>
+<KR><DT>2025-06-09T00:00:00+03:00</DT><Rate>20.00</Rate></KR>
+<KR><DT>2025-05-30T00:00:00+03:00</DT><Rate>21.00</Rate></KR>
+</KeyRate></KeyRateXMLResult></KeyRateXMLResponse></soap:Body></soap:Envelope>
