@@ -52,6 +52,19 @@ class RiskManager:
     def __init__(self, limits: Optional[RiskLimits] = None):
         self.limits = limits or RiskLimits()
 
+    # ---- допустимая вселенная ----
+    def eligible(self, rows: list[ScreenRow]) -> list[ScreenRow]:
+        """Бумаги, которые стратегия вообще вправе рассматривать (спред, листинг)."""
+        L = self.limits
+        out = []
+        for r in rows:
+            if r.metrics.g_spread is not None and r.metrics.g_spread > L.max_g_spread_bp:
+                continue
+            if r.bond.list_level and r.bond.list_level > L.min_list_level:
+                continue
+            out.append(r)
+        return out
+
     # ---- целевые веса ----
     def enforce_targets(self, targets: dict[str, float], rows: dict[str, ScreenRow]) -> tuple[dict[str, float], list[Violation]]:
         """Обрезает целевые веса по лимитам. Возвращает (веса, список замечаний)."""

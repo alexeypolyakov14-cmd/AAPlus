@@ -124,8 +124,8 @@ class BondMetrics:
     dirty_price: float               # руб. на бумагу
     ytm: float                       # эффективная доходность к погашению, % годовых
     ytm_to_offer: Optional[float]    # к оферте (если есть)
-    yield_worst: float               # min(ytm, ytm_to_offer)
-    macaulay_duration: float         # лет
+    yield_worst: float               # доходность к «худшей» дате (оферта, если она первична)
+    macaulay_duration: float         # лет, к той же дате, что и yield_worst
     modified_duration: float
     convexity: float
     dv01: float                      # руб. на бумагу при сдвиге на 1 б.п.

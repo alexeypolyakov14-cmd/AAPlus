@@ -182,7 +182,7 @@ class BacktestEngine:
             # 3) ребалансировка
             if _is_rebalance_day(ts, prev_ts, self.rebalance) and universe:
                 curve = self._curve(universe, today)
-                rows = self.screener.run(universe, curve, today)
+                rows = self.risk.eligible(self.screener.run(universe, curve, today))
                 by_id = {r.secid: r for r in rows}
                 for r in rows:
                     if r.metrics.g_spread is not None:
@@ -205,7 +205,7 @@ class BacktestEngine:
                 for secid in pf.positions:
                     if secid not in sell_rows and secid in marks:
                         sell_rows[secid] = self._synthetic_row(self.bonds[secid], marks[secid], today)
-                orders = orders_from_targets(pf, targets, sell_rows, strategy=self.strategy.name)
+                orders = orders_from_targets(pf, targets, sell_rows, strategy=self.strategy.name, reasons=self.strategy.explain(ctx))
                 for o in orders:
                     self._execute(pf, o, sell_rows[o.secid], today, trades)
                 weights_hist[today] = pf.weights(marks)

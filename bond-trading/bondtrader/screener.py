@@ -125,8 +125,8 @@ class Screener:
             if why:
                 self.rejected[bond.secid] = why
                 continue
-            if enrich is not None and (bond.has_offer or bond.has_amortization or not bond.coupon_period):
-                bond = enrich(bond)
+            if enrich is not None and not bond.has_full_schedule:
+                bond = enrich(bond)  # полный график купонов/амортизаций/оферт — иначе YTM расходится с биржевым
             m = compute_metrics(bond, quote, settle, curve)
             if m is None:
                 # fallback на биржевые данные, если наш расчёт невозможен

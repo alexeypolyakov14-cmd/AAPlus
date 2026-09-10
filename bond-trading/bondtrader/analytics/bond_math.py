@@ -230,15 +230,23 @@ def compute_metrics(bond: Bond, quote: Quote, settle: Optional[date] = None,
     mac, mod, conv = duration_convexity(flows, settle, y)
 
     ytm_offer = None
+    offer_primary = False
     if bond.offer_date and settle < bond.offer_date < bond.maturity:
         try:
             of = build_cash_flows(bond, settle, to_offer=True)
-            ytm_offer = ytm_from_dirty_price(of, settle, dirty) * 100
+            y_of = ytm_from_dirty_price(of, settle, dirty)
+            ytm_offer = y_of * 100
+            # Рыночная конвенция: если купоны после оферты не определены — считаем к оферте;
+            # иначе берём худшую из доходностей.
+            unknown_after = bond.has_full_schedule and any(v is None for d, v in bond.coupons if d > bond.offer_date)
+            if unknown_after or y_of <= y:
+                offer_primary = True
+                mac, mod, conv = duration_convexity(of, settle, y_of)
         except ValueError:
             ytm_offer = None
 
     ytm_pct = y * 100
-    worst = min(ytm_pct, ytm_offer) if ytm_offer is not None else ytm_pct
+    worst = ytm_offer if offer_primary else ytm_pct
     annual_coupon = 0.0
     if bond.coupon_value and bond.coupon_period:
         annual_coupon = bond.coupon_value * DAYS_IN_YEAR / bond.coupon_period
@@ -249,7 +257,7 @@ def compute_metrics(bond: Bond, quote: Quote, settle: Optional[date] = None,
     g_spread = None
     if curve is not None:
         try:
-            g_spread = (ytm_pct - curve.yield_at(mac)) * 100  # б.п.
+            g_spread = (worst - curve.yield_at(mac)) * 100  # б.п., к «худшему» горизонту
         except Exception:
             g_spread = None
 

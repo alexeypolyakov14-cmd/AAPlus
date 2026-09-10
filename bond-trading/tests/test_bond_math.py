@@ -136,3 +136,20 @@ def test_coupon_payments_between_synthetic_and_full():
     b.coupons = [(date(2025, 9, 10), 34.9), (date(2026, 3, 11), None)]
     b.has_full_schedule = True
     assert coupon_payments_between(b, date(2025, 6, 2), date(2026, 12, 31)) == [(date(2025, 9, 10), 34.9), (date(2026, 3, 11), 34.9)]
+
+
+def test_puttable_bond_metrics_to_offer_when_coupons_unknown():
+    import json, os
+    from bondtrader.data.moex import apply_bondization, parse_bondization
+    with open(os.path.join(os.path.dirname(__file__), "fixtures", "bondization_mts.json"), encoding="utf-8") as f:
+        sched = parse_bondization(json.load(f))
+    b = Bond(secid="RU000A104ZK2", name="МТС 1P-21", face_value=1000, coupon_value=49.86, coupon_period=182,
+             next_coupon=date(2025, 9, 1), maturity=date(2029, 3, 1))
+    apply_bondization(b, sched, today=SETTLE)
+    curve = ZeroCurve(SETTLE, [(0.5, 18.0), (1, 17.0), (3, 15.0), (10, 14.0)])
+    q = Quote(secid=b.secid, trade_date=SETTLE, price=101.0, accrued=accrued_interest(b, SETTLE))
+    m = compute_metrics(b, q, curve=curve)
+    # купоны после оферты неизвестны -> считаем к оферте 2026-09-01: дюрация ~1.2 года
+    assert 1.0 < m.macaulay_duration < 1.3
+    assert m.yield_worst == m.ytm_to_offer
+    assert m.g_spread == pytest.approx((m.yield_worst - curve.yield_at(m.macaulay_duration)) * 100)

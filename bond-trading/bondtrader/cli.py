@@ -146,7 +146,7 @@ def cmd_bond(args, settings):
 
 def _build_context(args, settings) -> tuple[MarketSnapshot, list[ScreenRow], Portfolio, object]:
     snap = load_snapshot(settings, args.fixtures)
-    rows = _screen(snap, settings, args)
+    rows = RiskManager(RiskLimits.from_dict(settings.get("risk", default={}))).eligible(_screen(snap, settings, args))
     broker = _make_broker(args, settings)
     pf = _broker_portfolio(broker, rows, settings)
     return snap, rows, pf, broker
