@@ -46,6 +46,19 @@ def from_quotation(q: Optional[dict]) -> float:
     return float(int(q.get("units", 0) or 0)) + float(q.get("nano", 0) or 0) / 1e9
 
 
+def g(d: Optional[dict], *keys: str, default=None):
+    """Достаёт поле из ответа, допуская snake_case и camelCase имена."""
+    if not d:
+        return default
+    for k in keys:
+        if k in d:
+            return d[k]
+        camel = "".join(w.capitalize() if i else w for i, w in enumerate(k.split("_")))
+        if camel in d:
+            return d[camel]
+    return default
+
+
 def order_status_text(status: str) -> str:
     return {
         "EXECUTION_REPORT_STATUS_FILL": "filled",
@@ -106,7 +119,7 @@ class TInvestBroker:
         return self._account
 
     def sandbox_open(self, pay_in_rub: float = 0.0, reuse: bool = True) -> str:
-        """Открывает счёт песочницы (или переиспользует уже открытый) и пополняет его."""
+        """Открывает счёт песочницы (или переиспользует уже открытый) и доводит остаток рублей до pay_in_rub."""
         if not self.sandbox:
             raise RuntimeError("sandbox_open доступен только в режиме песочницы")
         acc = ""
@@ -116,19 +129,21 @@ class TInvestBroker:
             if open_accs:
                 acc = open_accs[0]["id"]
         if not acc:
-            acc = self.call("SandboxService/OpenSandboxAccount", {"name": "bondtrader"}).get("accountId", "")
+            acc = g(self.call("SandboxService/OpenSandboxAccount", {"name": "bondtrader"}), "account_id", default="")
         self._account = acc
         if pay_in_rub > 0:
-            self.call("SandboxService/SandboxPayIn", {"accountId": acc, "amount": {"currency": "rub", **to_quotation(pay_in_rub)}})
+            missing = pay_in_rub - self.cash()
+            if missing > 1:
+                self.call("SandboxService/SandboxPayIn", {"account_id": acc, "amount": {"currency": "rub", **to_quotation(missing)}})
         return acc
 
     # ---- инструменты ----
     def instrument(self, bond: Bond) -> dict:
         if bond.secid in self._by_secid:
             return self._by_secid[bond.secid]
-        body = {"idType": "INSTRUMENT_ID_TYPE_TICKER", "classCode": bond.board or "TQOB", "id": bond.secid}
+        body = {"id_type": "INSTRUMENT_ID_TYPE_TICKER", "class_code": bond.board or "TQOB", "id": bond.secid}
         if bond.isin:
-            body = {"idType": "INSTRUMENT_ID_TYPE_ISIN", "id": bond.isin}
+            body = {"id_type": "INSTRUMENT_ID_TYPE_ISIN", "id": bond.isin}
         inst = self.call("InstrumentsService/BondBy", body).get("instrument") or {}
         if not inst:
             raise RuntimeError(f"{bond.secid}: инструмент не найден в T-Invest")
@@ -139,7 +154,7 @@ class TInvestBroker:
     def _instrument_by_uid(self, uid: str) -> dict:
         if uid in self._by_uid:
             return self._by_uid[uid]
-        inst = self.call("InstrumentsService/GetInstrumentBy", {"idType": "INSTRUMENT_ID_TYPE_UID", "id": uid}).get("instrument") or {}
+        inst = self.call("InstrumentsService/GetInstrumentBy", {"id_type": "INSTRUMENT_ID_TYPE_UID", "id": uid}).get("instrument") or {}
         self._by_uid[uid] = inst
         if inst.get("ticker"):
             self._by_secid[inst["ticker"]] = inst
@@ -147,7 +162,7 @@ class TInvestBroker:
 
     # ---- состояние счёта ----
     def cash(self) -> float:
-        pos = self.call("OperationsService/GetPositions", {"accountId": self.account_id()})
+        pos = self.call("OperationsService/GetPositions", {"account_id": self.account_id()})
         total = 0.0
         for m in pos.get("money", []):
             if (m.get("currency") or "").lower() == "rub":
@@ -155,12 +170,12 @@ class TInvestBroker:
         return total
 
     def positions(self) -> dict[str, int]:
-        pf = self.call("OperationsService/GetPortfolio", {"accountId": self.account_id(), "currency": "RUB"})
+        pf = self.call("OperationsService/GetPortfolio", {"account_id": self.account_id(), "currency": "RUB"})
         out: dict[str, int] = {}
         for p in pf.get("positions", []):
-            if p.get("instrumentType") != "bond":
+            if g(p, "instrument_type") != "bond":
                 continue
-            uid = p.get("instrumentUid") or ""
+            uid = g(p, "instrument_uid", default="") or ""
             inst = self._instrument_by_uid(uid) if uid else {}
             ticker = inst.get("ticker") or p.get("figi") or uid
             qty = int(round(from_quotation(p.get("quantity"))))
@@ -170,47 +185,50 @@ class TInvestBroker:
 
     def last_price(self, bond: Bond) -> Optional[float]:
         inst = self.instrument(bond)
-        r = self.call("MarketDataService/GetLastPrices", {"instrumentId": [inst["uid"]]})
-        for lp in r.get("lastPrices", []):
+        r = self.call("MarketDataService/GetLastPrices", {"instrument_id": [inst["uid"]]})
+        for lp in g(r, "last_prices", default=[]) or []:
             return from_quotation(lp.get("price"))
         return None
 
     # ---- ордера ----
     def place_order(self, order: Order, bond: Bond, quote: Quote) -> OrderReport:
-        inst = self.instrument(bond)
+        try:
+            inst = self.instrument(bond)
+        except RuntimeError as e:
+            return OrderReport(order, "rejected", message=str(e))
         lot = int(inst.get("lot") or 1)
         lots = max(order.qty // lot, 0)
         if lots == 0:
             return OrderReport(order, "rejected", message=f"количество {order.qty} меньше лота {lot}")
         body: dict[str, Any] = {
-            "instrumentId": inst["uid"],
+            "instrument_id": inst["uid"],
             "quantity": str(lots),
             "direction": "ORDER_DIRECTION_BUY" if order.side == "BUY" else "ORDER_DIRECTION_SELL",
-            "accountId": self.account_id(),
-            "orderId": str(uuid.uuid4()),
+            "account_id": self.account_id(),
+            "order_id": str(uuid.uuid4()),
         }
         if order.price:
-            body["orderType"] = "ORDER_TYPE_LIMIT"
+            body["order_type"] = "ORDER_TYPE_LIMIT"
             body["price"] = to_quotation(round(order.price, 4))
         else:
-            body["orderType"] = "ORDER_TYPE_BESTPRICE"
+            body["order_type"] = "ORDER_TYPE_BESTPRICE"
         try:
             r = self.call("OrdersService/PostOrder", body)
         except RuntimeError as e:
             return OrderReport(order, "rejected", message=str(e))
-        status = order_status_text(r.get("executionReportStatus", ""))
-        filled_lots = int(r.get("lotsExecuted", 0) or 0)
-        avg = from_quotation(r.get("executedOrderPrice")) if r.get("executedOrderPrice") else None
-        commission = from_quotation(r.get("executedCommission")) if r.get("executedCommission") else 0.0
-        return OrderReport(order, status, broker_order_id=r.get("orderId", ""), filled_qty=filled_lots * lot,
+        status = order_status_text(g(r, "execution_report_status", default="") or "")
+        filled_lots = int(g(r, "lots_executed", default=0) or 0)
+        avg = from_quotation(g(r, "executed_order_price")) if g(r, "executed_order_price") else None
+        commission = from_quotation(g(r, "executed_commission")) if g(r, "executed_commission") else 0.0
+        return OrderReport(order, status, broker_order_id=g(r, "order_id", default="") or "", filled_qty=filled_lots * lot,
                            fill_price=avg if avg else None, commission=commission, message=r.get("message", ""))
 
     def open_orders(self) -> list[dict]:
-        return self.call("OrdersService/GetOrders", {"accountId": self.account_id()}).get("orders", [])
+        return self.call("OrdersService/GetOrders", {"account_id": self.account_id()}).get("orders", [])
 
     def cancel_all(self) -> int:
         n = 0
         for o in self.open_orders():
-            self.call("OrdersService/CancelOrder", {"accountId": self.account_id(), "orderId": o.get("orderId")})
+            self.call("OrdersService/CancelOrder", {"account_id": self.account_id(), "order_id": g(o, "order_id")})
             n += 1
         return n

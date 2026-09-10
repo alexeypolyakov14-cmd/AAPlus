@@ -69,25 +69,28 @@ def test_tinvest_broker_with_fake_transport(rows):
         if method == "UsersService/GetAccounts":
             return {"accounts": [{"id": "acc-1", "status": "ACCOUNT_STATUS_OPEN"}]}
         if method == "InstrumentsService/BondBy":
+            assert body["id_type"] == "INSTRUMENT_ID_TYPE_ISIN"
             return {"instrument": {"uid": "uid-238", "figi": "BBG00", "ticker": "SU26238RMFS4", "lot": 1}}
         if method == "OrdersService/PostOrder":
-            assert body["instrumentId"] == "uid-238" and body["quantity"] == "10"
-            assert body["orderType"] == "ORDER_TYPE_LIMIT" and body["price"]["units"] == "53"
-            return {"orderId": "ord-1", "executionReportStatus": "EXECUTION_REPORT_STATUS_FILL", "lotsExecuted": 10,
-                    "executedOrderPrice": {"units": "53", "nano": 200000000}, "executedCommission": {"units": "3", "nano": 0}}
+            assert body["instrument_id"] == "uid-238" and body["quantity"] == "10" and body["account_id"] == "acc-1"
+            assert body["order_type"] == "ORDER_TYPE_LIMIT" and body["price"]["units"] == "53"
+            return {"order_id": "ord-1", "execution_report_status": "EXECUTION_REPORT_STATUS_FILL", "lots_executed": 10,
+                    "executed_order_price": {"units": "53", "nano": 200000000}, "executed_commission": {"units": "3", "nano": 0}}
         if method == "OperationsService/GetPositions":
             return {"money": [{"currency": "rub", "units": "100000", "nano": 500000000}, {"currency": "usd", "units": "5", "nano": 0}]}
         if method == "OperationsService/GetPortfolio":
-            return {"positions": [{"instrumentType": "bond", "instrumentUid": "uid-238", "quantity": {"units": "10", "nano": 0}},
+            return {"positions": [{"instrument_type": "bond", "instrument_uid": "uid-238", "quantity": {"units": "10", "nano": 0}},
                                   {"instrumentType": "share", "instrumentUid": "x", "quantity": {"units": "1", "nano": 0}}]}
         if method == "InstrumentsService/GetInstrumentBy":
             return {"instrument": {"uid": "uid-238", "ticker": "SU26238RMFS4"}}
         if method == "OrdersService/GetOrders":
-            return {"orders": [{"orderId": "o1"}]}
+            return {"orders": [{"order_id": "o1"}]}
         if method == "OrdersService/CancelOrder":
+            assert body["order_id"] == "o1"
             return {}
         if method == "SandboxService/SandboxPayIn":
-            assert body["amount"]["units"] == "500000"
+            # на счёте 100000.5 -> доводим до 500000
+            assert body["amount"]["units"] == "399999"
             return {}
         raise AssertionError(method)
 
