@@ -51,6 +51,10 @@ on:
         description: "Сравнительный бэктест стратегий 2023–2025"
         type: boolean
         default: false
+      smoke:
+        description: "Живой прогон MOEX + ЦБ + рейтинги + новости (долгий, ~35 мин; иначе только по push в main)"
+        type: boolean
+        default: false
 
 defaults:
   run:
@@ -75,7 +79,9 @@ jobs:
     name: Живой прогон MOEX + ЦБ
     runs-on: ubuntu-latest
     needs: test
-    if: github.event_name != 'schedule' || github.event.schedule == '40 7 * * 1-5'
+    # долгий job (~35 мин): только по push в main, по ежедневному расписанию или по явной галочке smoke —
+    # иначе каждый push/разовая команда сжигали по 35 минут лимита Actions
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'schedule' && github.event.schedule == '40 7 * * 1-5') || (github.event_name == 'workflow_dispatch' && inputs.smoke)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -348,7 +354,7 @@ jobs:
   sandbox:
     name: Песочница T-Invest (ручной запуск, нужен секрет TINVEST_TOKEN)
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' && !inputs.bot && !inputs.telegram_setup && inputs.lookup == '' && inputs.cmd == ''
+    if: github.event_name == 'workflow_dispatch' && !inputs.bot && !inputs.telegram_setup && !inputs.smoke && !inputs.daily && inputs.lookup == '' && inputs.cmd == ''
     env:
       TINVEST_TOKEN: ${{ secrets.TINVEST_TOKEN }}
       BONDTRADER_CONFIG: ${{ inputs.profile == 'default' && 'config.yaml' || format('configs/{0}.yaml', inputs.profile) }}
