@@ -123,11 +123,16 @@ class RatingsBook:
             best_len = max(len(_norm_name(r.alias)) for r in hits)
             return [r for r in hits if len(_norm_name(r.alias)) == best_len]
         if bond.full_name:
-            out: list[Rating] = []
-            for subject, rs in self.by_subject.items():
-                if issuer_match(subject, bond.full_name):
-                    out.extend(rs)
-            if out:
+            # только субъекты, которые и есть этот эмитент (в обе стороны), и только лучшие по совпадению —
+            # иначе к РусГидро подмешивался «СГ РУС», а к Совкомбанк Лизингу — Совкомбанк и ПР-Лизинг,
+            # и правило «худший рейтинг из агентств» брало рейтинг чужой организации
+            scored = [(issuer_same(subject, bond.full_name), subject) for subject in self.by_subject]
+            best = max((sc for sc, _ in scored), default=0.0)
+            if best > 0:
+                out: list[Rating] = []
+                for sc, subject in scored:
+                    if sc == best:
+                        out.extend(self.by_subject[subject])
                 return out
         return []
 
@@ -191,7 +196,7 @@ def _norm_name(s: str) -> str:
 _LEGAL_RE = re.compile(r"\b(ооо|ао|пао|зао|оао|нао|ип|мкао|мфк|мкк|гк|ук|ик|лк|фк|нко|общество с ограниченной ответственностью|"
                        r"публичное акционерное общество|акционерное общество|закрытое акционерное общество|"
                        r"limited|llc|plc|ltd|jsc|pjsc|ojsc|компани\w*|корпорац\w*|групп\w*|холдинг\w*|финанс\w*|инвест\w*|капитал\w*)\b")
-_STOP = {"бо", "бо-п", "серии", "серия", "выпуск", "выпуска", "облигаций", "облигации", "биржевых", "биржевые", "и"}
+_STOP = {"бо", "бо-п", "пбо", "боп", "по", "зо", "серии", "серия", "выпуск", "выпуска", "облигаций", "облигации", "биржевых", "биржевые", "и"}
 
 
 # Сокращения в кратких именах MOEX -> как эмитент называется у агентств
@@ -227,6 +232,44 @@ def issuer_tokens(name: str) -> list[str]:
 _GENERIC_RE = re.compile(r"^(государствен|коммерческ|российск|национальн|федеральн|объединенн|публичн|акционерн|"
                          r"микрофинансов|лизингов|страхов|инвестиционн|управляющ|специализирован|торгов|производствен|"
                          r"промышленн|научн|транспортн|строительн|девелоп)")
+
+
+def _tok_eq(a: str, b: str) -> bool:
+    """Одно и то же слово с точностью до склонения/усечения: общий префикс не короче 6 букв и не короче длины
+    короткого слова минус 3 («технология»/«технологии» — да, «совкомбанк»/«совкомфлот» — нет)."""
+    if a == b:
+        return True
+    n = min(len(a), len(b))
+    if n < 5:
+        return False
+    common = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        common += 1
+    return common >= max(6, n - 3)
+
+
+def issuer_same(subject: str, full_name: str) -> float:
+    """Та же ли организация: субъект рейтинга и полное имя выпуска MOEX (без ОПФ и серии).
+
+    В отличие от issuer_match (вхождение эмитента в текст новости) требует совпадения В ОБЕ СТОРОНЫ:
+    все существенные слова субъекта есть в имени выпуска и наоборот. «ПАО Совкомбанк» ≠ «Совкомбанк Лизинг»,
+    «ООО СГ РУС» ≠ «РусГидро», «МФК Вэббанкир» ≠ «ВЭБ.РФ», «ООО Технология» ≠ «Облачные технологии».
+    Возвращает 0 (не та) или долю совпавших слов (1.0 — полное совпадение).
+    """
+    st, ft = issuer_tokens(subject), issuer_tokens(full_name)
+    if not st or not ft:
+        return 0.0
+    ms = [t for t in st if any(_tok_eq(t, f) for f in ft)]
+    mf = [f for f in ft if any(_tok_eq(t, f) for t in st)]
+    if not ms or all(_GENERIC_RE.match(t) for t in ms):
+        return 0.0
+    if any(t not in ms and not _GENERIC_RE.match(t) for t in st):
+        return 0.0
+    if any(f not in mf and not _GENERIC_RE.match(f) for f in ft):
+        return 0.0
+    return (len(ms) + len(mf)) / (len(st) + len(ft))
 
 
 def issuer_match(subject: str, full_name: str) -> bool:

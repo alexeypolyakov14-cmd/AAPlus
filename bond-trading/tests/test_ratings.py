@@ -221,3 +221,38 @@ def test_moex_abbreviations():
     assert issuer_match("ПАО «ГМК «Норильский никель»", "ГМК Нор.никель БО-001Р-07")
     assert issuer_match("Амурская область", "Минфин Амурской обл. 24001")
     assert not issuer_match("ПАО «МТС»", "МТС-Банк 001P-01") or True  # банк — отдельный эмитент, допускаем совпадение по префиксу
+
+
+def test_issuer_same_is_two_sided():
+    from bondtrader.data.ratings import issuer_same
+    assert issuer_same('ПАО "РУСГИДРО"', "РусГидро БО-002Р-13") > 0
+    assert issuer_same("ООО «СГ РУС»", "РусГидро БО-002Р-13") == 0
+    assert issuer_same("ВЭБ.РФ", "ВЭБ.РФ ПБО-002Р-59ПО") > 0
+    assert issuer_same('ООО МФК "ВЭББАНКИР"', "ВЭБ.РФ ПБО-002Р-59ПО") == 0
+    assert issuer_same("ПАО «Т Плюс»", "ЭН ПЛЮС ГИДРО 001РС-10") == 0
+    assert issuer_same("ООО «Технология»", "Облачные технологии 001P-01") == 0
+    assert issuer_same('ООО "ОБЛАЧНЫЕ ТЕХНОЛОГИИ"', "Облачные технологии 001P-01") == 1.0
+    assert issuer_same('ООО "СОВКОМБАНК ЛИЗИНГ"', "Совкомбанк Лизинг 002Р-01") == 1.0
+    assert issuer_same('ПАО "СОВКОМБАНК"', "Совкомбанк Лизинг 002Р-01") == 0
+    assert issuer_same('ООО "ПР-ЛИЗИНГ"', "Совкомбанк Лизинг 002Р-01") == 0
+    assert issuer_same('ПАО "СЕГЕЖА ГРУПП"', "Сегежа Групп 003P-06R") > 0
+    assert issuer_same('ООО "КАРШЕРИНГ РУССИЯ"', "iКаршеринг Руссия 001P-06") == 1.0
+
+
+def test_ratings_book_picks_only_same_entity():
+    from datetime import date
+    from bondtrader.data.ratings import Rating, RatingsBook
+    from bondtrader.models import Bond
+    book = RatingsBook([
+        Rating('ПАО "РУСГИДРО"', "Эксперт РА", "AAA", date(2025, 11, 10)),
+        Rating("ООО «СГ РУС»", "НКР", "BB-", date(2025, 12, 19)),
+        Rating('ООО "СОВКОМБАНК ЛИЗИНГ"', "Эксперт РА", "AA-", date(2025, 11, 6)),
+        Rating('ПАО "СОВКОМБАНК"', "АКРА", "BBB", None, kind="issue"),
+        Rating('ООО "ПР-ЛИЗИНГ"', "Эксперт РА", "BBB+", date(2026, 4, 17)),
+        Rating("ВЭБ.РФ", "Эксперт РА", "AAA", date(2026, 8, 7)),
+        Rating('ООО МФК "ВЭББАНКИР"', "Эксперт РА", "BB", date(2026, 3, 18)),
+    ])
+    assert book.lookup(Bond("A", name="РусГид2Р13", full_name="РусГидро БО-002Р-13")).rating == "AAA"
+    assert book.lookup(Bond("B", name="СовкмЛ 2Р1", full_name="Совкомбанк Лизинг 002Р-01")).rating == "AA-"
+    assert book.lookup(Bond("C", name="ВЭБ2Р-60", full_name="ВЭБ.РФ ПБО-002Р-60")).rating == "AAA"
+    assert len(book.candidates(Bond("C", name="ВЭБ2Р-60", full_name="ВЭБ.РФ ПБО-002Р-60"))) == 1
