@@ -273,6 +273,18 @@ def _issuer_from_cell(cell_html: str) -> str:
     return ""
 
 
+_COMPANY_HREF_RE = re.compile(r"""href=["']([^"']*/database/companies/[^"']*)["']""", re.I)
+
+
+def _company_url_from_cell(cell_html: str) -> str:
+    """Ссылка на страницу компании в базе Эксперт РА (там пресс-релизы с метриками), абсолютная."""
+    m = _COMPANY_HREF_RE.search(cell_html)
+    if not m:
+        return ""
+    href = html.unescape(m.group(1))
+    return href if href.startswith("http") else RAEXPERT_BASE + href
+
+
 def parse_table_with_header(text: str, agency: str, kind: str) -> list[Rating]:
     idx = _header_map(text)
     if "rating" not in idx or "subject" not in idx:
@@ -288,12 +300,15 @@ def parse_table_with_header(text: str, agency: str, kind: str) -> list[Rating]:
         if not rating:
             continue
         subject = cells[idx["subject"]]
+        url = ""
         if "issue" in idx and idx["issue"] < len(raw_cells):
             issuer = _issuer_from_cell(raw_cells[idx["issue"]])
+            url = _company_url_from_cell(raw_cells[idx["issue"]])
             if issuer:
                 subject = issuer
         elif idx["subject"] < len(raw_cells):
             issuer = _issuer_from_cell(raw_cells[idx["subject"]])
+            url = _company_url_from_cell(raw_cells[idx["subject"]])
             if issuer:
                 subject = issuer
         isin = ""
@@ -308,7 +323,7 @@ def parse_table_with_header(text: str, agency: str, kind: str) -> list[Rating]:
             dm = _DATE_RE.search(cells[idx["date"]])
             if dm:
                 d = date(int(dm.group(3)), int(dm.group(2)), int(dm.group(1)))
-        out.append(Rating(subject=subject, agency=agency, rating=rating, date=d, kind=kind, isin=isin))
+        out.append(Rating(subject=subject, agency=agency, rating=rating, date=d, kind=kind, isin=isin, url=url))
     return out
 
 

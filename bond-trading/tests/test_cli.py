@@ -116,3 +116,8 @@ def test_history_and_issuer_commands_offline(capsys, cfg):
     assert "vs_issuer" in out and "chg30" in out
     out = run(capsys, "--fixtures", FIX, "-c", cfg, "spreads", "--top", "5")
     assert "vs_issuer" in out
+
+
+def test_fundamentals_command_offline(capsys, cfg):
+    out = run(capsys, "--fixtures", FIX, "-c", cfg, "fundamentals", "Газпнф", "--no-web")
+    assert "выпусков на MOEX" in out and "Долг:" in out and "Рейтинг:" in out

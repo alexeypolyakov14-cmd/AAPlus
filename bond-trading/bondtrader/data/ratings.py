@@ -72,6 +72,7 @@ class Rating:
     isin: str = ""
     emitter_id: str = ""
     alias: str = ""                   # префикс SHORTNAME на MOEX
+    url: str = ""                     # страница компании у агентства (пресс-релизы с метриками), если известна
 
     def __post_init__(self):
         norm = normalize_rating(self.rating)
@@ -201,9 +202,9 @@ class RatingsBook:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w", encoding="utf-8", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["subject", "agency", "rating", "date", "kind", "isin", "emitter_id", "alias"])
+            w.writerow(["subject", "agency", "rating", "date", "kind", "isin", "emitter_id", "alias", "url"])
             for r in self.all:
-                w.writerow([r.subject, r.agency, r.rating, r.date.isoformat() if r.date else "", r.kind, r.isin, r.emitter_id, r.alias])
+                w.writerow([r.subject, r.agency, r.rating, r.date.isoformat() if r.date else "", r.kind, r.isin, r.emitter_id, r.alias, r.url])
 
 
 def parse_rating_row(row: dict) -> Optional[Rating]:
@@ -219,7 +220,8 @@ def parse_rating_row(row: dict) -> Optional[Rating]:
             d = None
     return Rating(subject=subject, agency=(row.get("agency") or "?").strip(), rating=rating, date=d,
                   kind=(row.get("kind") or "issuer").strip(), isin=(row.get("isin") or "").strip().upper(),
-                  emitter_id=str(row.get("emitter_id") or "").strip(), alias=(row.get("alias") or "").strip())
+                  emitter_id=str(row.get("emitter_id") or "").strip(), alias=(row.get("alias") or "").strip(),
+                  url=(row.get("url") or "").strip())
 
 
 def _norm_name(s: str) -> str:

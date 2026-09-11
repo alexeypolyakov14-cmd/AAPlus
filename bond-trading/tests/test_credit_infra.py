@@ -313,3 +313,29 @@ def test_news_stop_requires_issuer_as_subject():
                      NewsItem(date(2025, 5, 30), "Ромашка ООО", "google:РБК", "ООО Ромашка допустила дефолт по облигациям", "", "", -4.0, "default")])
     assert book.issuer_score(SETTLE, name="Сбербанк ПАО").stop is None
     assert book.issuer_score(SETTLE, name="Ромашка ООО БО-01").stop is not None
+
+
+def test_fundamentals_debt_map_and_release_digest():
+    from datetime import date
+    from bondtrader.data.fundamentals import debt_map, digest_release, release_links
+    from bondtrader.data.ratings_web import parse_table_with_header
+    from bondtrader.models import Bond, Quote
+    settle = date(2026, 9, 11)
+    b1 = Bond("A1", name="Аэрфью2Р05", full_name="Аэрофьюэлз 002Р-05", maturity=date(2027, 8, 20), coupon_percent=19.75, issue_size=1_000_000, face_value=1000.0)
+    b2 = Bond("A2", name="Аэрфью3Р01", full_name="Аэрофьюэлз003Р-01", maturity=date(2029, 3, 1), offer_date=date(2028, 3, 1), coupon_percent=20.0,
+              issue_size=1_400_000, face_value=1000.0)
+    dm = debt_map("АЭРОФЬЮЭЛЗ", [(b1, Quote("A1", settle, price=99.0)), (b2, Quote("A2", settle, price=98.0))], {"A1": 19.5}, {"A1"})
+    assert round(dm.total_mln) == 2400 and dm.schedule(settle) == {2027: 1000.0, 2028: 1400.0} and dm.schedule(settle, by_offer=False) == {2027: 1000.0, 2029: 1400.0}
+    assert "2 выпусках" in dm.describe(settle) and dm.lines[0].in_screen and not dm.lines[1].in_screen
+    page = '<div><a href="/releases/2026/sep10a">Подтверждён рейтинг</a><a href="/releases/2025/mar01b">Старый</a><a href="/releases/2026/sep10a">дубль</a></div>'
+    assert release_links(page) == ["https://raexpert.ru/releases/2026/sep10a", "https://raexpert.ru/releases/2025/mar01b"]
+    rel = """<html><title>Эксперт РА подтвердил рейтинг АО «Аэрофьюэлз» на уровне ruA</title><body><p>10.09.2026.</p>
+    <p>Отношение чистого долга к EBITDA на 30.06.2026 составило 2,1x, покрытие процентных платежей EBITDA — 2,8x. Погода хорошая.
+    Выручка за 2025 год выросла на 15% до 62 млрд руб. Прогноз по рейтингу стабильный.</p></body></html>"""
+    d = digest_release("https://raexpert.ru/releases/2026/sep10a", rel)
+    assert "ruA" in d.title and d.date == date(2026, 9, 10) and len(d.sentences) == 2 and "2,1x" in d.sentences[0] and "62 млрд" in d.sentences[1]
+    # ссылка на страницу компании из реестра
+    tbl = """<table><thead><tr><th>Рейтингуемое лицо</th><th>Рейтинг</th><th>Дата</th></tr></thead><tbody>
+    <tr><td><a href="/database/companies/aerofuels/">АО «Аэрофьюэлз»</a></td><td>ruA</td><td>10.09.2026</td></tr></tbody></table>"""
+    rs = parse_table_with_header(tbl, "Эксперт РА", "issuer")
+    assert rs[0].url == "https://raexpert.ru/database/companies/aerofuels/" and rs[0].rating == "A"

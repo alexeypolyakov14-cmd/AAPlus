@@ -1311,6 +1311,72 @@ def cmd_issuer(args, settings):
     _print_df(df.head(args.top), csv=args.csv)
 
 
+def cmd_fundamentals(args, settings):
+    """Фундамент по эмитенту из доступного в CI: карта долга MOEX, пресс-релиз агентства, проба ГИР БО, новости."""
+    from .data.fundamentals import debt_map, fetch_releases
+    from .data.ratings_web import fetch as web_fetch
+    snap = load_snapshot(settings, args.fixtures)
+    rows = _screen(snap, settings, args)
+    _header(snap)
+    by_id = {r.secid: r for r in rows}
+    hits = [(b, q) for b, q in snap.universe if any(x in f"{b.name} {b.full_name}".upper() or b.secid.upper() == x or (b.isin or "").upper() == x
+                                                    for x in [t.strip().upper() for t in args.query.replace("|", ",").split(",") if t.strip()])]
+    if not hits:
+        raise SystemExit(f"«{args.query}»: не найдено среди {len(snap.universe)} бумаг")
+    keys = sorted({b.issuer_key for b, _ in hits})
+    for key in keys:
+        bonds = [(b, q) for b, q in snap.universe if b.issuer_key == key]
+        print(f"\n=== {key}: выпусков на MOEX {len(bonds)}, в скрине {sum(1 for b, _ in bonds if b.secid in by_id)} ===")
+        # --- паспорт по описанию MOEX ISS ---
+        desc = {}
+        if snap.describe is not None:
+            try:
+                desc = snap.describe(bonds[0][0]) or {}
+            except Exception as e:  # noqa: BLE001
+                print(f"описание MOEX недоступно: {e}")
+        inn = next((str(v) for k, v in desc.items() if k and "INN" in k.upper() and v), "")
+        passport = {k: v for k, v in desc.items() if k and any(t in k.upper() for t in ("INN", "EMITTER", "OKPO", "NAME", "REGNUMBER"))}
+        if passport:
+            print("Паспорт (MOEX ISS): " + "; ".join(f"{k}={v}" for k, v in passport.items()))
+        # --- карта долга ---
+        dm = debt_map(key, bonds, {r.secid: round(r.metrics.yield_worst, 1) for r in rows}, set(by_id))
+        print("Долг: " + dm.describe(snap.settle))
+        print(pd.DataFrame([{"secid": x.secid, "name": x.name, "mln": None if x.outstanding_mln is None else round(x.outstanding_mln),
+                             "coupon": x.coupon, "maturity": x.maturity, "offer": x.offer, "amort": x.amortization, "price": x.price,
+                             "ytw": x.ytw, "screen": x.in_screen} for x in dm.lines]).to_string(index=False))
+        # --- рейтинг и пресс-релиз ---
+        rating = snap.ratings.lookup(bonds[0][0]) if snap.ratings is not None else None
+        cands = snap.ratings.candidates(bonds[0][0]) if snap.ratings is not None else []
+        print("Рейтинг: " + (f"{rating.rating} ({rating.agency}, {rating.date})" if rating else "нет в книге")
+              + ("; все записи: " + "; ".join(f"{c.agency} {c.rating} {c.date or ''} {c.kind}" for c in cands[:6]) if len(cands) > 1 else ""))
+        url = next((c.url for c in cands if c.url and c.agency == (rating.agency if rating else "")), "") or next((c.url for c in cands if c.url), "")
+        if url and not args.no_web:
+            digests, diag = fetch_releases(url, web_fetch, limit=args.releases)
+            print(f"Пресс-релизы агентства ({url}): {diag}")
+            for d in digests:
+                print(d.describe())
+        elif not url:
+            print("Пресс-релизы: ссылки на страницу компании в книге нет (нужен свежий `ratings fetch --sources raexpert`).")
+        # --- ГИР БО ---
+        if inn and not args.no_web:
+            from .data.girbo import GirboClient, GirboUnavailable, fetch_issuer
+            try:
+                org, sts = fetch_issuer(GirboClient(), inn, cache_dir=settings.get("data", "financials_cache", default="data/financials"))
+                if org:
+                    print(f"ГИР БО: {org.get('shortName') or org.get('fullName')}, отчётов {len(sts)}: "
+                          + "; ".join(f"{st.year}: выручка {st.values.get('revenue', 0) / 1e3:,.0f} млн" for st in sts))
+                else:
+                    print("ГИР БО: организация не найдена")
+            except GirboUnavailable as e:
+                print(f"ГИР БО недоступен из этой сети ({str(e)[:80]}) — отчётность только при запуске из РФ.")
+            except Exception as e:  # noqa: BLE001
+                print(f"ГИР БО: ошибка {str(e)[:120]}")
+        # --- новости ---
+        if snap.news is not None:
+            ns = snap.news.issuer_score(snap.settle, name=bonds[0][0].full_name or bonds[0][0].name, inn=inn, days=args.days)
+            print("Новости: " + ns.describe())
+
+
 def cmd_strategies(args, settings):
     for name, cls in STRATEGIES.items():
         doc = (cls.__doc__ or "").strip().splitlines()[0]
@@ -1410,6 +1476,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--regime", choices=["расширение", "сжатие", "стабильно", "первичка", "оферта"], help="только бумаги в этом режиме")
     sp.add_argument("--points", type=int, default=20, help="сколько точек ряда печатать для одной бумаги"); sp.add_argument("--csv")
     sp.set_defaults(fn=cmd_history)
+    sp = sub.add_parser("fundamentals", parents=[common], help="фундамент по эмитенту: карта долга MOEX, пресс-релиз агентства с метриками, проба ГИР БО, новости"); screen_opts(sp)
+    sp.add_argument("query", help="эмитент/бумага (часть названия/SECID/ISIN)"); sp.add_argument("--releases", type=int, default=2, help="сколько последних релизов читать")
+    sp.add_argument("--days", type=int, default=120, help="окно новостей"); sp.add_argument("--no-web", action="store_true", help="без обращений к сайтам агентств/ГИР БО")
+    sp.set_defaults(fn=cmd_fundamentals)
     sp = sub.add_parser("issuer", parents=[common], help="кривая эмитента: платит ли выпуск больше других выпусков того же эмитента"); screen_opts(sp)
     sp.add_argument("query", nargs="?", help="эмитент/бумага (часть названия/SECID/ISIN) — все его выпуски; без аргумента — эмитенты с самым выбивающимся выпуском")
     sp.add_argument("--top", type=int, default=30); sp.add_argument("--csv"); sp.set_defaults(fn=cmd_issuer)
