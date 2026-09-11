@@ -256,3 +256,11 @@ def test_ratings_book_picks_only_same_entity():
     assert book.lookup(Bond("B", name="СовкмЛ 2Р1", full_name="Совкомбанк Лизинг 002Р-01")).rating == "AA-"
     assert book.lookup(Bond("C", name="ВЭБ2Р-60", full_name="ВЭБ.РФ ПБО-002Р-60")).rating == "AAA"
     assert len(book.candidates(Bond("C", name="ВЭБ2Р-60", full_name="ВЭБ.РФ ПБО-002Р-60"))) == 1
+
+
+def test_plus_sign_names():
+    from bondtrader.data.ratings import issuer_same
+    assert issuer_same("АО «ЭН+ ГИДРО»", "ЭН ПЛЮС ГИДРО 001РС-10") == 1.0
+    assert issuer_same("АО «ЭН+ ГИДРО»", "ЭН+ГИДРО 001РС-02") == 1.0
+    assert issuer_same("ПАО «Т Плюс»", "Т Плюс 001P-01") == 1.0
+    assert issuer_same("ПАО «Т Плюс»", "ЭН ПЛЮС ГИДРО 001РС-10") == 0

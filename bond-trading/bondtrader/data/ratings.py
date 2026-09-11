@@ -218,13 +218,15 @@ def issuer_tokens(name: str) -> list[str]:
         if k in s:
             s = s.replace(k, v)
     s = re.sub(r"[«»\"'().,;:/\\-]", " ", s)
+    # «ЭН+ГИДРО», «ЭН ПЛЮС ГИДРО», «Т Плюс» — один и тот же знак «+», приклеенный к соседним словам
+    s = re.sub(r"\s*(?:\+|\bплюс\b)\s*", "+", s).strip()
     s = _LEGAL_RE.sub(" ", s)
     toks = []
     for t in re.split(r"\s+", s):
         # маркеры MOEX: «i» — сектор инноваций, «s» — устойчивое развитие (iКаршеринг, sГТЛК)
         if len(t) >= 2 and t[0] in ("i", "s") and re.match(r"[а-я]", t[1]):
             t = t[1:]
-        if len(t) >= 3 and t not in _STOP and not re.search(r"[0-9]", t):
+        if (len(t) >= 3 or "+" in t) and t not in _STOP and not re.search(r"[0-9]", t):
             toks.append(t)
     return toks
 
