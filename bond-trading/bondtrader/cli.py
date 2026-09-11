@@ -210,6 +210,7 @@ def cmd_signals(args, settings):
     risk = RiskManager(RiskLimits.from_dict(settings.get("risk", default={})))
     targets, notes = risk.enforce_targets(targets, by_id)
     reasons = st.explain(ctx)
+    all_rows = _rows_with_positions(snap, rows, pf)
     print(f"Стратегия: {name} {params or ''}\n")
     df = pd.DataFrame([{"secid": s, "name": by_id[s].bond.name, "weight": round(w * 100, 2), "ytw": round(by_id[s].metrics.yield_worst, 2),
                         "duration": round(by_id[s].metrics.macaulay_duration, 2), "g_spread": by_id[s].metrics.g_spread and round(by_id[s].metrics.g_spread),
@@ -222,7 +223,7 @@ def cmd_signals(args, settings):
         print(f"\nЦелевой портфель: инвестировано {tw:.1%} (остальное — деньги), мод. дюрация бумаг {dur:.2f}, YTW {ytw:.2f}%")
     for n in notes:
         print(f"  [{'!' if n.hard else '~'}] {n.message}")
-    orders = orders_from_targets(pf, targets, by_id, strategy=name, reasons=reasons)
+    orders = orders_from_targets(pf, targets, all_rows, strategy=name, reasons=reasons)
     if orders:
         print("\nОрдера относительно текущего портфеля:")
         print(pd.DataFrame([o.as_dict() for o in orders]).to_string(index=False))
@@ -240,6 +241,8 @@ def cmd_trade(args, settings):
     by_id = ctx.by_id
     risk = RiskManager(RiskLimits.from_dict(settings.get("risk", default={})))
     targets, notes = risk.enforce_targets(st.targets(ctx), by_id)
+    # позиции, выпавшие из скрина (структурные, дефолт, ликвидность), тоже надо уметь продать
+    by_id = _rows_with_positions(snap, rows, pf)
     orders = orders_from_targets(pf, targets, by_id, strategy=name, reasons=st.explain(ctx))
     for n in notes:
         print(f"  [{'!' if n.hard else '~'}] {n.message}")
@@ -538,8 +541,15 @@ def cmd_sandbox_init(args, settings):
     from .execution.tinvest import TInvestBroker
     t = settings.get("execution", "tinvest", default={})
     br = TInvestBroker(settings.tinvest_token, sandbox=True, account_id="", ca_bundle=t.get("ca_bundle") or None)
-    acc = br.sandbox_open(args.amount, reuse=not args.new)
-    print(f"Счёт песочницы {acc} готов, пополнен на {args.amount:,.0f} руб. Денег на счёте: {br.cash():,.0f} руб. "
+    acc = br.sandbox_open(0.0, reuse=not args.new)
+    has_positions = bool(br.positions())
+    if has_positions and not args.topup:
+        # счёт уже торгует: пополнение исказило бы учёт результата (NAV рос бы от каждого запуска)
+        print(f"Счёт песочницы {acc}: есть позиции, пополнение пропущено (добавьте --topup, чтобы довести деньги до {args.amount:,.0f}). "
+              f"Денег на счёте: {br.cash():,.0f} руб.")
+        return
+    br.sandbox_open(args.amount, reuse=True)
+    print(f"Счёт песочницы {acc} готов, деньги доведены до {args.amount:,.0f} руб. Денег на счёте: {br.cash():,.0f} руб. "
           f"Если счетов несколько — укажите id в config.yaml -> execution.tinvest.account_id")
 
 
@@ -989,6 +999,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--curves", action="store_true", help="грузить исторические кривые zcyc с MOEX (медленнее)")
     sp.add_argument("--csv", help="сохранить NAV в CSV"); sp.add_argument("--trades", action="store_true"); sp.set_defaults(fn=cmd_backtest)
     sp = sub.add_parser("sandbox-init", parents=[common], help="открыть и пополнить счёт песочницы T-Invest"); sp.add_argument("--amount", type=float, default=1_000_000)
+    sp.add_argument("--topup", action="store_true", help="пополнить даже если на счёте уже есть позиции")
     sp.add_argument("--new", action="store_true", help="открыть новый счёт, даже если уже есть открытый")
     sp.set_defaults(fn=cmd_sandbox_init)
     return p
