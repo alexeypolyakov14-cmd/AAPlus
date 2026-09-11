@@ -72,3 +72,11 @@ def test_keyrate_parse_and_regime():
     tight = [(date(2025, 1, 1), 16.0), (date(2025, 2, 1), 18.0), (date(2025, 3, 1), 19.0), (date(2025, 3, 15), 19.0)]
     v2 = analyze_keyrate(tight)
     assert v2.regime == "tightening" and v2.consecutive_moves == 2
+
+
+def test_face_currency_wins_over_settlement_currency():
+    from bondtrader.data.moex import parse_bond_row
+    b = parse_bond_row({"SECID": "X", "SHORTNAME": "ПолиплП2Б3", "FACEUNIT": "USD", "CURRENCYID": "SUR", "FACEVALUE": "1000", "MATDATE": "2027-01-01"})
+    assert b.currency == "USD"
+    b = parse_bond_row({"SECID": "Y", "SHORTNAME": "Обычная", "FACEUNIT": "SUR", "CURRENCYID": "SUR", "FACEVALUE": "1000", "MATDATE": "2027-01-01"})
+    assert b.currency == "SUR"

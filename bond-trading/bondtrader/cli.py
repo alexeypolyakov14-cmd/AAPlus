@@ -649,6 +649,7 @@ def cmd_sandbox_init(args, settings):
 
 def cmd_ratings(args, settings):
     from .data.ratings import RatingsBook
+    from .data.ratings import _norm_name as _rn
     if args.action == "discover":
         from .data.ratings_web import discover, discover_deep
         if args.deep:
@@ -695,6 +696,31 @@ def cmd_ratings(args, settings):
         cands = book.candidates(bond)
         if len(cands) > 1:
             print("Все записи: " + "; ".join(f"{c.agency} {c.rating} {c.date or ''}" for c in cands))
+        return
+    if args.action == "match":
+        # диагностика сопоставления: какой записью книги и каким путём (ISIN / emitter / alias / название) получен рейтинг
+        snap = load_snapshot(settings, args.fixtures)
+        qs = [x.strip().upper() for x in (args.secid or "").replace("|", ",").split(",") if x.strip()]
+        if not qs:
+            raise SystemExit("укажите бумагу: ratings match \"РусГидро, ВЭБ\"")
+        for b, _ in snap.universe:
+            hay = f"{b.name} {b.full_name}".upper()
+            if not any(q in hay or b.secid.upper() == q or (b.isin or "").upper() == q for q in qs):
+                continue
+            issuer = snap.issuers.lookup(b) if snap.issuers is not None else None
+            emitter = issuer.emitter_id if issuer else None
+            if b.isin and b.isin.upper() in book.by_isin:
+                how = "ISIN"
+            elif emitter and str(emitter) in book.by_emitter:
+                how = f"emitter_id {emitter}"
+            elif any(alias and _rn(b.name).startswith(alias) for alias, _ in book.by_alias):
+                how = "alias (префикс краткого имени)"
+            else:
+                how = "название (issuer_match по полному имени)"
+            r = book.lookup(b, emitter)
+            print(f"\n{b.secid} {b.name} | {b.full_name} -> {r.rating + ' (' + r.agency + ')' if r else 'нет'}  [{how}]")
+            for c in book.candidates(b, emitter)[:12]:
+                print(f"    {c.agency:10} {c.rating:5} {str(c.date or ''):10} kind={c.kind:7} subject={c.subject[:45]!r} alias={c.alias!r} isin={c.isin}")
         return
     if args.action == "list":
         print(f"Книга рейтингов: {len(book)} записей")
@@ -1103,7 +1129,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--days", type=int, default=120); sp.add_argument("--negative", action="store_true", help="list: только негатив"); sp.add_argument("--top", type=int, default=60)
     screen_opts(sp); sp.set_defaults(fn=cmd_news)
     sp = sub.add_parser("ratings", parents=[common], help="кредитные рейтинги: list | show SECID | coverage | discover")
-    sp.add_argument("action", choices=["list", "show", "coverage", "discover", "fetch"]); sp.add_argument("secid", nargs="?")
+    sp.add_argument("action", choices=["list", "show", "match", "coverage", "discover", "fetch"]); sp.add_argument("secid", nargs="?", help="для show/match: SECID/ISIN/часть названия (match — несколько через запятую)")
     sp.add_argument("--names", nargs="*", help="для discover: какие источники смотреть (для --deep: список URL)")
     sp.add_argument("--deep", action="store_true", help="для discover: формы, пагинация, ajax")
     sp.add_argument("--pages", type=int, default=3, help="для fetch --press: сколько страниц пресс-релизов НКР")

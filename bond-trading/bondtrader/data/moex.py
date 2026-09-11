@@ -69,7 +69,9 @@ def parse_bond_row(row: dict) -> Bond:
         board=row.get("BOARDID") or "",
         face_value=face,
         initial_face_value=max(initial, face),
-        currency=row.get("CURRENCYID") or row.get("FACEUNIT") or "SUR",
+        # валюта номинала (FACEUNIT): у замещающих и юаневых выпусков расчёты (CURRENCYID) идут в рублях,
+        # а доходность считается в валюте номинала — такие бумаги нельзя сравнивать с рублёвой кривой
+        currency=row.get("FACEUNIT") or row.get("CURRENCYID") or "SUR",
         coupon_percent=_num(row.get("COUPONPERCENT")),
         coupon_value=_num(row.get("COUPONVALUE")),
         coupon_period=int(_num(row.get("COUPONPERIOD")) or 0) or None,
