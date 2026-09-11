@@ -236,6 +236,11 @@ def test_issuer_key_keeps_numbers_in_names_and_drops_series():
     assert issuer_key_of_full("Аэрофьюэлз-002Р-04") == issuer_key_of_full("Аэрофьюэлз002Р-06") == issuer_key_of_full("Аэрофьюэлз 002Р-05") == "АЭРОФЬЮЭЛЗ"
     assert issuer_key_of_full("О'КЕЙ ООО 001P-06") == "ОКЕЙ" and issuer_key_of_full("Сбер Sb42R") == "СБЕР"
     assert issuer_key_of_full("Трансмашхолдинг АО ПБО-08") == "ТРАНСМАШХОЛДИНГ" and issuer_key_of_full("ГПБ (АО) БО 005Р-02Р") == "ГПБ"
+    assert issuer_key_of_full("КАМАЗ БО-П15") == issuer_key_of_full("КАМАЗ БО-П20") == "КАМАЗ"
+    assert issuer_key_of_full("ТАЛЬВЕН БО-П01") == "ТАЛЬВЕН" and issuer_key_of_full("Пионер-Лизинг БО-П04") == "ПИОНЕР-ЛИЗИНГ"
+    assert issuer_key_of_full("Селигдар GOLD01") == issuer_key_of_full("Селигдар GOLD03") == "СЕЛИГДАР"
+    assert issuer_key_of_full("АЛИУМ01Р1") == issuer_key_of_full("АЛИУМ01Р2") == "АЛИУМ" and issuer_key_of_full("АБЗ-1 002Р-06") == "АБЗ-1"
+    assert issuer_key_of_full("Т Плюс 001P-01") == "Т ПЛЮС" and issuer_key_of_full("Сегежа3P6R") == "СЕГЕЖА"
 
 
 def test_gspread_peers_ranking():
