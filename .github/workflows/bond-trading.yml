@@ -4,8 +4,14 @@ on:
   push:
     branches: ["**"]
     paths: ["bond-trading/**", ".github/workflows/bond-trading.yml"]
+  schedule:
+    - cron: "40 7 * * 1-5"   # 10:40 МСК по будням: рынок открыт с 09:50, новости и рейтинги свежие
   workflow_dispatch:
     inputs:
+      daily:
+        description: "Ежедневный отчёт (новости, алерты, целевой портфель, Telegram)"
+        type: boolean
+        default: false
       strategy:
         description: "Стратегия для песочницы"
         type: choice
@@ -123,6 +129,70 @@ jobs:
           bondtrader signals -s spread
       - name: Бэктест (короткий, явная вселенная ОФЗ)
         run: bondtrader backtest -s ladder --start 2024-01-10 --end 2024-12-30 --universe SU26207RMFS9,SU26224RMFS4,SU26238RMFS4,SU26244RMFS2 --rebalance monthly --trades -v
+
+  daily:
+    name: Ежедневный отчёт (расписание 10:40 МСК; профиль hy)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.daily)
+    env:
+      TINVEST_TOKEN: ${{ secrets.TINVEST_TOKEN }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      BONDTRADER_CONFIG: configs/hy.yaml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e .
+      - name: Сертификаты УЦ Минцифры (T-Invest)
+        if: env.TINVEST_TOKEN != ''
+        run: |
+          set -e
+          cp "$(python -m certifi)" /tmp/ca-bundle.pem
+          for name in russian_trusted_root_ca russian_trusted_sub_ca; do
+            curl -sSfLo /tmp/$name.raw "https://gu-st.ru/content/lending/${name}_pem.crt"
+            if grep -q "BEGIN CERTIFICATE" /tmp/$name.raw; then openssl x509 -in /tmp/$name.raw -inform PEM -out /tmp/$name.pem; else openssl x509 -in /tmp/$name.raw -inform DER -out /tmp/$name.pem; fi
+            printf '\n' >> /tmp/ca-bundle.pem; cat /tmp/$name.pem >> /tmp/ca-bundle.pem
+          done
+          echo "TINVEST_CA_BUNDLE=/tmp/ca-bundle.pem" >> "$GITHUB_ENV"
+      - name: Книги (кэш) — рейтинги, новости, отчётность, факты
+        uses: actions/cache@v4
+        with:
+          path: |
+            bond-trading/data/ratings.csv
+            bond-trading/data/news.csv
+            bond-trading/data/financials.csv
+            bond-trading/data/issuers.csv
+            bond-trading/data/disclosure.csv
+          key: daily-books-${{ github.run_id }}
+          restore-keys: |
+            daily-books-
+            credit-books-
+      - name: Рейтинги (обновление, накопительно)
+        continue-on-error: true
+        run: bondtrader ratings fetch 2>&1 | tail -3
+      - name: Новости по эмитентам скрина
+        continue-on-error: true
+        run: bondtrader news fetch --from-screen --general 2>&1 | tail -5
+      - name: Отчёт (бумажный портфель или песочница T-Invest)
+        run: |
+          if [ -n "$TINVEST_TOKEN" ]; then BR="--broker tinvest"; else BR=""; fi
+          bondtrader report $BR --md report.md > /dev/null
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+          bondtrader monitor $BR --strict || echo "::warning::есть критические алерты по позициям — см. отчёт"
+      - name: Telegram
+        if: env.TELEGRAM_BOT_TOKEN != '' && env.TELEGRAM_CHAT_ID != ''
+        continue-on-error: true
+        run: bondtrader notify --file report.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daily-report
+          path: |
+            bond-trading/report.md
+            bond-trading/data/news.csv
+            bond-trading/data/ratings.csv
+          if-no-files-found: ignore
 
   sandbox:
     name: Песочница T-Invest (ручной запуск, нужен секрет TINVEST_TOKEN)

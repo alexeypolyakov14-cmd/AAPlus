@@ -38,6 +38,7 @@ class MarketSnapshot:
     events: Optional[EventsBook] = None
     news: Optional[NewsBook] = None
     describe: Optional[Callable[[Bond], dict]] = None   # описание бумаги MOEX ISS (флаги дефолта)
+    rejected: dict[str, str] = field(default_factory=dict)  # secid -> причина отсева последним скрином
 
     def screen_kwargs(self) -> dict:
         return {"enrich": self.enrich, "ratings": self.ratings, "financials": self.financials,

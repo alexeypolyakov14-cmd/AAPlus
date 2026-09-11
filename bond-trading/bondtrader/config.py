@@ -80,7 +80,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "sandbox": True,
             "account_id": "",
             "token_env": "TINVEST_TOKEN",
+            "order_type": "auto",        # auto: песочница — рыночные, бой — лимитные по аску/биду; либо limit | market
         },
+    },
+    "monitor": {
+        "price_drop_pct": 5.0,           # падение чистой цены от средней цены покупки, % — предупреждение
+        "news_alert_score": -3.0,        # балл новостей по эмитенту за окно ниже — предупреждение
+        "min_rating": "",                # пусто — берётся risk.min_rating
+    },
+    "notify": {
+        "telegram_token_env": "TELEGRAM_BOT_TOKEN",
+        "telegram_chat_env": "TELEGRAM_CHAT_ID",
     },
 }
 

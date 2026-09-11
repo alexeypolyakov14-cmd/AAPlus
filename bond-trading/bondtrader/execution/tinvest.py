@@ -73,7 +73,7 @@ class TInvestBroker:
     name = "tinvest"
 
     def __init__(self, token: str, sandbox: bool = True, account_id: str = "", timeout: float = 15,
-                 post: Optional[Callable[[str, dict], dict]] = None, ca_bundle: Optional[str] = None):
+                 post: Optional[Callable[[str, dict], dict]] = None, ca_bundle: Optional[str] = None, order_type: str = "auto"):
         if not token and post is None:
             raise ValueError("не задан токен T-Invest API (переменная окружения TINVEST_TOKEN)")
         self.token = token
@@ -86,6 +86,9 @@ class TInvestBroker:
         self._post = post or self._http_post
         self._by_secid: dict[str, dict] = {}   # secid -> instrument
         self._by_uid: dict[str, dict] = {}
+        # Песочница не сводит лимитные заявки по облигациям (висят NEW даже по аску) — там по умолчанию рыночные;
+        # на бою по умолчанию лимитные по аску/биду с запасом (см. limit_price).
+        self.order_type = order_type if order_type in ("limit", "market") else ("market" if sandbox else "limit")
 
     # ---- транспорт ----
     def _http_post(self, method: str, body: dict) -> dict:
@@ -247,12 +250,12 @@ class TInvestBroker:
             "account_id": self.account_id(),
             "order_id": str(uuid.uuid4()),
         }
-        price = self.limit_price(order, quote)
+        price = self.limit_price(order, quote) if self.order_type == "limit" else None
         if price:
             body["order_type"] = "ORDER_TYPE_LIMIT"
             body["price"] = to_quotation(round(price, 4))
         else:
-            body["order_type"] = "ORDER_TYPE_BESTPRICE"
+            body["order_type"] = "ORDER_TYPE_MARKET"
         try:
             r = self.call("OrdersService/PostOrder", body)
         except RuntimeError as e:

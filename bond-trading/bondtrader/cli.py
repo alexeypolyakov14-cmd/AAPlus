@@ -70,6 +70,7 @@ def _screen(snap: MarketSnapshot, settings: Settings, args) -> list[ScreenRow]:
         cfg.min_rating = args.min_rating
     scr = Screener(cfg)
     rows = scr.run(snap.universe, snap.curve, snap.settle, **snap.screen_kwargs())
+    snap.rejected = dict(scr.rejected)
     if getattr(args, "verbose", False):
         rej = pd.Series(scr.rejected).value_counts()
         print("Отсев по причинам:\n" + rej.to_string(), file=sys.stderr)
@@ -179,7 +180,8 @@ def _make_broker(args, settings):
         from .execution.tinvest import TInvestBroker
         t = settings.get("execution", "tinvest", default={})
         sandbox = t.get("sandbox", True) and not getattr(args, "live", False)
-        return TInvestBroker(settings.tinvest_token, sandbox=sandbox, account_id=t.get("account_id", ""), ca_bundle=t.get("ca_bundle") or None)
+        return TInvestBroker(settings.tinvest_token, sandbox=sandbox, account_id=t.get("account_id", ""), ca_bundle=t.get("ca_bundle") or None,
+                             order_type=t.get("order_type", "auto"))
     raise SystemExit(f"неизвестный брокер {name}")
 
 
@@ -308,6 +310,169 @@ def cmd_portfolio(args, settings):
         print(f"\nАктивные заявки: {len(open_orders)} (деньги под ними заблокированы и не входят в «деньги» выше)")
         print(pd.DataFrame(recs).to_string(index=False))
     print(f"\nРеализованный PnL {pf.realized_pnl:,.0f}  купоны {pf.coupons_received:,.0f}  комиссии {pf.commissions_paid:,.0f}")
+
+
+def _rows_with_positions(snap: MarketSnapshot, rows: list[ScreenRow], pf: Portfolio) -> dict[str, ScreenRow]:
+    """Строки скрина + метрики по держащимся бумагам, которые скрин не прошли (для оценки и мониторинга)."""
+    from .analytics.bond_math import compute_metrics
+    by_id = {r.secid: r for r in rows}
+    for b, q in snap.universe:
+        if b.secid in pf.positions and b.secid not in by_id:
+            bb = snap.enrich(b) if snap.enrich is not None and not b.has_full_schedule else b
+            m = compute_metrics(bb, q, snap.settle, snap.curve)
+            if m:
+                rating = snap.ratings.lookup(bb) if snap.ratings is not None and not bb.is_ofz else None
+                issuer = snap.issuers.lookup(bb) if snap.issuers is not None and not bb.is_ofz else None
+                inn = issuer.inn if issuer else ""
+                row = ScreenRow(bb, q, m, rating=rating, inn=inn)
+                if snap.financials is not None and inn:
+                    row.fin = snap.financials.metrics(inn)
+                if snap.events is not None and not bb.is_ofz:
+                    row.stop_events = snap.events.stop_factors(snap.settle, 365, inn=inn, name=bb.full_name or bb.name)
+                if snap.news is not None and not bb.is_ofz:
+                    row.news = snap.news.issuer_score(snap.settle, name=bb.full_name or bb.name, inn=inn)
+                by_id[b.secid] = row
+    return by_id
+
+
+def _alerts(snap: MarketSnapshot, rows: list[ScreenRow], pf: Portfolio, broker, settings):
+    from .monitor import check_positions
+    by_id = _rows_with_positions(snap, rows, pf)
+    try:
+        open_orders = len(broker.open_orders())
+    except Exception:  # noqa: BLE001
+        open_orders = 0
+    mon = settings.get("monitor", default={}) or {}
+    return check_positions(pf, by_id, snap.rejected,
+                           max_g_spread_bp=settings.get("risk", "max_g_spread_bp", default=800),
+                           price_drop_pct=mon.get("price_drop_pct", 5.0), news_alert_score=mon.get("news_alert_score", -3.0),
+                           min_rating=mon.get("min_rating") or settings.get("risk", "min_rating", default=""),
+                           open_orders=open_orders), by_id
+
+
+def cmd_monitor(args, settings):
+    from .monitor import worst_level
+    snap, rows, pf, broker = _build_context(args, settings)
+    _header(snap)
+    alerts, _ = _alerts(snap, rows, pf, broker, settings)
+    print(f"Брокер: {broker.name}  позиций: {len(pf.positions)}  алертов: {len(alerts)}")
+    for a in alerts:
+        print("  " + str(a))
+    if not alerts:
+        print("  всё спокойно")
+    lvl = worst_level(alerts)
+    if args.strict and lvl == "critical":
+        return 2
+    return 0
+
+
+def build_report(args, settings) -> str:
+    """Ежедневный отчёт в Markdown: рынок, портфель, алерты, целевой портфель и ордера, негатив по эмитентам."""
+    from .monitor import worst_level
+    snap, rows, pf, broker = _build_context(args, settings)
+    name, params = _strategy_spec(args, settings)
+    st = make_strategy(name, params)
+    ctx = MarketContext(snap.settle, rows, snap.curve, snap.keyrate, pf)
+    by_id = ctx.by_id
+    targets, notes = RiskManager(RiskLimits.from_dict(settings.get("risk", default={}))).enforce_targets(st.targets(ctx), by_id)
+    reasons = st.explain(ctx)
+    orders = orders_from_targets(pf, targets, by_id, strategy=name, reasons=reasons)
+    alerts, all_rows = _alerts(snap, rows, pf, broker, settings)
+    risk = RiskManager(RiskLimits.from_dict(settings.get("risk", default={})))
+    pr = risk.portfolio_risk(pf, all_rows)
+    kr = f"{snap.keyrate.current:.2f}% ({snap.keyrate.regime})" if snap.keyrate else "н/д"
+    cv = f"1Y {snap.curve.yield_at(1):.2f}% / 3Y {snap.curve.yield_at(3):.2f}% / 10Y {snap.curve.yield_at(10):.2f}%" if snap.curve else "н/д"
+    L = []
+    lvl = worst_level(alerts)
+    badge = {"critical": "🔴", "warning": "🟡", "info": "🟢", None: "🟢"}[lvl]
+    L.append(f"# {badge} bondtrader {snap.settle} — {name} ({broker.name}{', песочница' if getattr(broker, 'sandbox', False) else ''})")
+    L.append("")
+    L.append(f"**Рынок.** Ключевая ставка {kr}; кривая ОФЗ {cv}; в скрине {len(rows)} бумаг из {len(snap.universe)}; "
+             f"рейтинги {len(snap.ratings) if snap.ratings else 0}, отчётность {snap.financials.issuers if snap.financials else 0} эмит., "
+             f"новости {len(snap.news) if snap.news else 0}.")
+    L.append("")
+    L.append(f"**Портфель.** NAV {pr.nav:,.0f} руб., деньги {pf.cash:,.0f} ({pr.cash_share:.0%}), позиций {len(pf.positions)}, "
+             f"мод. дюрация {pr.duration:.2f}, DV01 {pr.dv01:,.0f} руб./б.п., VaR 1д 95% {pr.var_1d_95:,.0f}, корпораты {pr.corporate_share:.0%}. "
+             f"Реализовано {pf.realized_pnl:,.0f}, купоны {pf.coupons_received:,.0f}, комиссии {pf.commissions_paid:,.0f}.")
+    L.append("")
+    L.append(f"## Алерты ({len(alerts)})")
+    L += [f"- {a}" for a in alerts] or ["- всё спокойно"]
+    L.append("")
+    if pf.positions:
+        L.append("## Позиции")
+        L.append("| secid | бумага | qty | ср. цена | цена | вес | YTW | дюр. | рейтинг | новости |")
+        L.append("|---|---|---:|---:|---:|---:|---:|---:|---|---:|")
+        marks = {s: (r.metrics.clean_price, r.quote.accrued, r.bond.face_value) for s, r in all_rows.items()}
+        w = pf.weights(marks)
+        for secid, pos in sorted(pf.positions.items(), key=lambda kv: -w.get(kv[0], 0)):
+            r = all_rows.get(secid)
+            if r is None:
+                L.append(f"| {secid} | ? | {pos.qty} | {pos.avg_price:.2f} | — | — | — | — | — | — |")
+                continue
+            nw = f"{r.news.score:+.1f}" if r.news is not None and r.news.n else "—"
+            L.append(f"| {secid} | {r.bond.name} | {pos.qty} | {pos.avg_price:.2f} | {r.metrics.clean_price:.2f} | {w.get(secid, 0):.1%} | "
+                     f"{r.metrics.yield_worst:.1f}% | {r.metrics.macaulay_duration:.1f} | {r.rating_str} | {nw} |")
+        L.append("")
+    L.append(f"## Целевой портфель {name}: {len(targets)} бумаг, инвестировано {sum(targets.values()):.0%}")
+    for n in notes:
+        L.append(f"- [{'!' if n.hard else '~'}] {n.message}")
+    if orders:
+        L.append("")
+        L.append(f"**Ордера для ребалансировки ({len(orders)}):**")
+        L.append("| secid | бумага | side | qty | цена | сумма | почему |")
+        L.append("|---|---|---|---:|---:|---:|---|")
+        for o in orders:
+            r = by_id.get(o.secid)
+            amt = o.qty * r.metrics.dirty_price if r else 0
+            L.append(f"| {o.secid} | {r.bond.name if r else '?'} | {o.side} | {o.qty} | {o.price:.2f} | {amt:,.0f} | {(reasons.get(o.secid, '') or '')[:90]} |")
+    else:
+        L.append("- ребалансировка не требуется")
+    L.append("")
+    if snap.news is not None:
+        watch = set(pf.positions) | set(targets)
+        neg = []
+        for secid in watch:
+            r = all_rows.get(secid) or by_id.get(secid)
+            if r is None or r.news is None:
+                continue
+            for it in r.news.items[:20]:
+                if it.score < 0 and (snap.settle - it.date).days <= 7:
+                    neg.append((it.date, r.bond.name, it.score, it.title))
+        if neg:
+            L.append("## Негативные новости за 7 дней по позициям и целям")
+            for d, nm, sc, title in sorted(set(neg), reverse=True)[:25]:
+                L.append(f"- {d} {nm} ({sc:+.1f}): {title[:110]}")
+            L.append("")
+    if snap.rejected:
+        stops = [(s, why) for s, why in snap.rejected.items() if any(m in why.lower() for m in ("дефолт", "default", "новости:"))]
+        if stops:
+            L.append(f"## Отсев по стоп-факторам ({len(stops)})")
+            L += [f"- {s}: {why}" for s, why in stops[:30]]
+            L.append("")
+    return "\n".join(L)
+
+
+def cmd_report(args, settings):
+    md = build_report(args, settings)
+    if args.md:
+        os.makedirs(os.path.dirname(args.md) or ".", exist_ok=True)
+        with open(args.md, "w", encoding="utf-8") as f:
+            f.write(md)
+        print(f"отчёт сохранён: {args.md}", file=sys.stderr)
+    print(md)
+    if args.telegram:
+        from .notify import strip_markdown, telegram_send
+        n = telegram_send(strip_markdown(md))
+        print(f"отправлено в Telegram: {n} сообщ.", file=sys.stderr)
+
+
+def cmd_notify(args, settings):
+    from .notify import strip_markdown, telegram_send
+    text = open(args.file, encoding="utf-8").read() if args.file else (args.text or "")
+    if not text.strip():
+        raise SystemExit("нечего отправлять: --file или --text")
+    n = telegram_send(strip_markdown(text))
+    print(f"отправлено в Telegram: {n} сообщ.")
 
 
 def cmd_backtest(args, settings):
@@ -706,6 +871,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--keep-orders", action="store_true", help="не снимать старые активные заявки перед ребалансировкой")
     sp.add_argument("--broker", choices=["paper", "tinvest"]); sp.add_argument("--confirm", action="store_true", help="реально отправить ордера (иначе dry-run)")
     sp.add_argument("--live", action="store_true", help="боевой контур T-Invest вместо песочницы"); sp.set_defaults(fn=cmd_trade)
+    sp = sub.add_parser("monitor", parents=[common], help="алерты по держащимся позициям (стоп-факторы, просадки, новости)"); screen_opts(sp)
+    sp.add_argument("--broker", choices=["paper", "tinvest"]); sp.add_argument("--live", action="store_true")
+    sp.add_argument("--strict", action="store_true", help="код возврата 2 при критических алертах"); sp.set_defaults(fn=cmd_monitor)
+    sp = sub.add_parser("report", parents=[common], help="ежедневный отчёт (Markdown): рынок, портфель, алерты, цель, ордера"); screen_opts(sp); strat_opts(sp)
+    sp.add_argument("--broker", choices=["paper", "tinvest"]); sp.add_argument("--live", action="store_true")
+    sp.add_argument("--md", help="сохранить в файл"); sp.add_argument("--telegram", action="store_true", help="отправить в Telegram (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)")
+    sp.set_defaults(fn=cmd_report)
+    sp = sub.add_parser("notify", parents=[common], help="отправить текст/файл в Telegram"); sp.add_argument("--file"); sp.add_argument("--text"); sp.set_defaults(fn=cmd_notify)
     sp = sub.add_parser("portfolio", parents=[common], help="состояние портфеля и риск-метрики"); screen_opts(sp)
     sp.add_argument("--broker", choices=["paper", "tinvest"]); sp.set_defaults(fn=cmd_portfolio)
     sp = sub.add_parser("backtest", parents=[common], help="бэктест стратегии на истории MOEX"); screen_opts(sp); strat_opts(sp)
@@ -727,7 +900,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     settings = Settings.load(args.config)
     try:
-        args.fn(args, settings)
+        rc = args.fn(args, settings)
     except KeyboardInterrupt:
         return 130
     except BrokenPipeError:  # вывод в head/less
@@ -736,7 +909,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         except Exception:  # noqa: BLE001
             pass
         return 0
-    return 0
+    return int(rc or 0)
 
 
 if __name__ == "__main__":

@@ -80,7 +80,9 @@ def test_tinvest_broker_with_fake_transport(rows):
             return {"instruments": [{"uid": "uid-x", "isin": body["query"], "ticker": "RU000A1XXXXX", "lot": 1}]}
         if method == "OrdersService/PostOrder":
             assert body["instrument_id"] == "uid-238" and body["quantity"] == "10" and body["account_id"] == "acc-1"
-            assert body["order_type"] == "ORDER_TYPE_LIMIT" and body["price"]["units"] == "53"
+            assert body["order_type"] in ("ORDER_TYPE_LIMIT", "ORDER_TYPE_MARKET")
+            if body["order_type"] == "ORDER_TYPE_LIMIT":
+                assert body["price"]["units"] == "53"
             return {"order_id": "ord-1", "execution_report_status": "EXECUTION_REPORT_STATUS_FILL", "lots_executed": 10,
                     "executed_order_price": {"units": "53", "nano": 200000000}, "executed_commission": {"units": "3", "nano": 0}}
         if method == "OperationsService/GetPositions":
@@ -101,7 +103,7 @@ def test_tinvest_broker_with_fake_transport(rows):
             return {}
         raise AssertionError(method)
 
-    br = TInvestBroker(token="", sandbox=True, post=fake_post)
+    br = TInvestBroker(token="", sandbox=True, post=fake_post, order_type="limit")
     assert br.account_id() == "acc-1"
     row = rows["SU26238RMFS4"]
     rep = br.place_order(Order("SU26238RMFS4", "BUY", 10, row.metrics.clean_price), row.bond, row.quote)
@@ -115,6 +117,14 @@ def test_tinvest_broker_with_fake_transport(rows):
     assert TInvestBroker.limit_price(Order("X", "BUY", 1, 100.0), q) == pytest.approx(100.65)
     assert TInvestBroker.limit_price(Order("X", "SELL", 1, 100.0), q) == pytest.approx(99.35)
     assert TInvestBroker.limit_price(Order("X", "BUY", 1, 100.0), _Q("X", row.quote.trade_date, price=100.0)) == pytest.approx(100.15)
+    # песочница по умолчанию — рыночные заявки (лимитные там не сводятся), бой — лимитные
+    assert TInvestBroker(token="", sandbox=True, post=fake_post).order_type == "market"
+    assert TInvestBroker(token="", sandbox=False, post=fake_post).order_type == "limit"
+    mk = TInvestBroker(token="", sandbox=True, post=fake_post)
+    calls.clear()
+    mk.place_order(Order("SU26238RMFS4", "BUY", 10, row.metrics.clean_price), row.bond, row.quote)
+    post = next(b for m, b in calls if m == "OrdersService/PostOrder")
+    assert post["order_type"] == "ORDER_TYPE_MARKET" and "price" not in post
     # запасной путь: бумага не найдена по тикеру -> FindInstrument по ISIN
     from bondtrader.models import Bond as _B
     other = _B(secid="RU000A1XXXXX", isin="RU000A1XXXXX", board="TQCB")
