@@ -80,3 +80,12 @@ def test_face_currency_wins_over_settlement_currency():
     assert b.currency == "USD"
     b = parse_bond_row({"SECID": "Y", "SHORTNAME": "Обычная", "FACEUNIT": "SUR", "CURRENCYID": "SUR", "FACEVALUE": "1000", "MATDATE": "2027-01-01"})
     assert b.currency == "SUR"
+
+
+def test_corporate_linker_detected_by_indexed_face():
+    from bondtrader.data.moex import parse_bond_row
+    b = parse_bond_row({"SECID": "RU000A10F504", "SHORTNAME": "ВЭБ2Р-58", "FACEVALUE": "1046.9", "INITIALFACEVALUE": "1000",
+                        "COUPONPERCENT": "1.85", "FACEUNIT": "SUR", "MATDATE": "2029-06-16"})
+    assert b.indexed_face and b.is_linker and not b.has_amortization
+    b = parse_bond_row({"SECID": "X", "SHORTNAME": "Обычная", "FACEVALUE": "1000", "INITIALFACEVALUE": "1000", "COUPONPERCENT": "15", "FACEUNIT": "SUR", "MATDATE": "2029-06-16"})
+    assert not b.is_linker

@@ -46,6 +46,7 @@ class Bond:
     buyback_price: Optional[float] = None   # цена выкупа по оферте, % от номинала
     issue_size: Optional[float] = None
     list_level: Optional[int] = None
+    indexed_face: bool = False           # номинал выше первоначального (индексация на инфляцию), а не амортизация
     sectype: str = ""
     lot_size: int = 1
     # Полный график из bondization (если загружен)
@@ -80,8 +81,11 @@ class Bond:
 
     @property
     def is_linker(self) -> bool:
-        """ОФЗ-ИН (индексируемый номинал)."""
-        return self.secid.startswith("SU52") or "ИН" in (self.name or "").upper().split()
+        """Индексируемый номинал: ОФЗ-ИН и корпоративные линкеры (номинал вырос выше первоначального при
+        символическом купоне — ВЭБ.РФ ПБО-002Р-58 с купоном 1.85% и номиналом 1046.9)."""
+        if self.secid.startswith("SU52") or "ИН" in (self.name or "").upper().split():
+            return True
+        return bool(self.indexed_face) and (self.coupon_percent or 0) < 5.0
 
     @property
     def has_amortization(self) -> bool:

@@ -69,6 +69,7 @@ def parse_bond_row(row: dict) -> Bond:
         board=row.get("BOARDID") or "",
         face_value=face,
         initial_face_value=max(initial, face),
+        indexed_face=face > initial + 1e-6,
         # валюта номинала (FACEUNIT): у замещающих и юаневых выпусков расчёты (CURRENCYID) идут в рублях,
         # а доходность считается в валюте номинала — такие бумаги нельзя сравнивать с рублёвой кривой
         currency=row.get("FACEUNIT") or row.get("CURRENCYID") or "SUR",
