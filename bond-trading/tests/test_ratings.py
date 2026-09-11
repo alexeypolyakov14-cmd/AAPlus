@@ -292,6 +292,17 @@ def test_numbered_names_and_mfo_qualifiers_are_distinct():
     assert book.lookup(Bond("C", name="ПСБ Фин2P2", full_name="МФК ПСБ Финанс 002P-02")).rating == "A+"
 
 
+def test_glued_series_does_not_hide_issuer_name():
+    """«Аэрофьюэлз002Р-06» на MOEX: серия приклеена к имени — раньше слово с цифрами выбрасывалось и эмитент оставался без рейтинга."""
+    from bondtrader.data.ratings import Rating, RatingsBook, issuer_same, issuer_tokens
+    from bondtrader.models import Bond
+    assert issuer_tokens("Аэрофьюэлз002Р-06") == ["аэрофьюэлз"] and issuer_tokens("Аэрофьюэлз-002Р-04") == ["аэрофьюэлз"]
+    assert issuer_tokens("ПАО «ТГК-14»") == ["тгк-14"] and issuer_tokens("АЛИУМ01Р1") == ["алиум"]
+    book = RatingsBook([Rating('АО "АЭРОФЬЮЭЛЗ"', "Эксперт РА", "A", kind="issue")])
+    assert issuer_same('АО "АЭРОФЬЮЭЛЗ"', "Аэрофьюэлз002Р-06") == 1.0
+    assert book.lookup(Bond("X", name="Аэрфью2Р06", full_name="Аэрофьюэлз002Р-06")).rating == "A"
+
+
 def test_primary_agency_policy():
     from datetime import date
     from bondtrader.data.ratings import Rating, RatingsBook
