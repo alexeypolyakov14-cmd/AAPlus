@@ -88,8 +88,8 @@ def discover(names: Optional[list[str]] = None, sample: int = 1200) -> None:
 
 def discover_deep(urls: Optional[list[str]] = None) -> None:
     """Формы, пагинация и ajax-подсказки на страницах агентств."""
-    urls = urls or ["https://raexpert.ru/ratings/credits_all/", "https://raexpert.ru/all-services/rating-export",
-                    "https://www.acra-ratings.ru/ratings/issuers/", "https://www.acra-ratings.ru/ratings/emissions/"]
+    urls = urls or ["https://www.acra-ratings.ru/press-releases/", "https://www.acra-ratings.ru/ratings/issuers/?ajax=y",
+                    "https://raexpert.ru/ratings/regions/", "https://raexpert.ru/ratings/municipal/", "https://raexpert.ru/ratings/credits_by/"]
     for url in urls:
         try:
             code, ctype, text = fetch(url)
@@ -97,6 +97,10 @@ def discover_deep(urls: Optional[list[str]] = None) -> None:
             print(f"== {url}\n   ERROR {e}")
             continue
         print(f"== {url}  HTTP {code} len={len(text)}")
+        print(f"   rating-like tokens: {re.findall(r'(?:ru)?[ABC]{1,3}[+-]?(?:[(]RU[)]|[.]ru)', text)[:12]}; <table>: {len(re.findall(r'<table', text, re.I))}")
+        for m in list(re.finditer(r"(?:ru)?[ABC]{1,3}[+-]?(?:[(]RU[)]|[.]ru)", text))[:2]:
+            i = m.start()
+            print("   near rating: " + re.sub(r"\s+", " ", text[max(0, i - 700): i + 300])[:1000])
         for m in re.finditer(r"<form[^>]*>(.*?)</form>", text, re.S | re.I):
             tag = re.search(r"<form[^>]*>", m.group(0), re.I).group(0)
             inputs = re.findall(r"""<(?:input|select|textarea)[^>]*name=["']([^"']+)["'][^>]*""", m.group(1), re.I)
@@ -440,6 +444,7 @@ class RaexpertClient:
             pages_done += 1
             if n_new == 0:
                 break
+        log.info("Эксперт РА %s: страниц %d, последняя %d", url, pages_done, max(visited))
         return out
 
 

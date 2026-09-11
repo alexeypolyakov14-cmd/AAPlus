@@ -406,7 +406,8 @@ def cmd_ratings(args, settings):
         missing = [r for r in rows if r.rating is None]
         if missing:
             print("Без рейтинга (для добавления alias в CSV):")
-            print(pd.DataFrame([{"secid": r.secid, "name": r.bond.name, "isin": r.bond.isin, "ytw": round(r.metrics.yield_worst, 2)} for r in missing]).to_string(index=False))
+            print(pd.DataFrame([{"secid": r.secid, "name": r.bond.name, "full_name": r.bond.full_name[:40], "isin": r.bond.isin,
+                                 "ytw": round(r.metrics.yield_worst, 2)} for r in missing]).to_string(index=False))
         return
 
 
