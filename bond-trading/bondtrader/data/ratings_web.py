@@ -24,6 +24,7 @@ CANDIDATES = {
     "acra_issuers": "https://www.acra-ratings.ru/ratings/issuers/",
     "acra_issues": "https://www.acra-ratings.ru/ratings/issues/",
     "acra_emissions": "https://www.acra-ratings.ru/ratings/emissions/",
+    "acra_press": "https://www.acra-ratings.ru/press-releases/",
     "raexpert_credits_all": "https://raexpert.ru/ratings/credits_all/",
     "raexpert_bankcredit_all": "https://raexpert.ru/ratings/bankcredit_all/",
     "raexpert_debt_inst": "https://raexpert.ru/ratings/debt_inst/",
@@ -336,35 +337,121 @@ RAEXPERT_SECTIONS = {
 }
 
 
-def load_raexpert(max_pages: int = 60) -> list[Rating]:
+_HASH_RE = re.compile(r"setRatingPageHash\('([^']+)'\)")
+_CSRF_RE = re.compile(r"CSRFAjaxTokenPageHash\s*=\s*'([^']+)'")
+RAEXPERT_BASE = "https://raexpert.ru"
+
+
+def decode_page_hash(h: str) -> dict:
+    """'…PAGE:2' — base64 с первыми 10 символами, перенесёнными в конец. Возвращает {TIME, RATING_ID, PAGE}."""
+    import base64
+    try:
+        raw = base64.b64decode(h[-10:] + h[:-10] + "==").decode("utf-8", "ignore")
+    except Exception:  # noqa: BLE001
+        return {}
+    out = {}
+    for part in raw.split("|"):
+        if ":" in part:
+            k, v = part.split(":", 1)
+            out[k.strip()] = v.strip()
+    return out
+
+
+def encode_page_hash(rating_id: str, page: int, ts: Optional[int] = None) -> str:
+    import base64
+    import time
+    raw = f"TIME:{ts or int(time.time())}|RATING_ID:{rating_id}|PAGE:{page}"
+    b = base64.b64encode(raw.encode()).decode().rstrip("=")
+    # обратная перестановка: первые 10 символов base64 уходят в конец
+    return b[10:] + b[:10]
+
+
+class RaexpertClient:
+    """Обход рейтинг-листов Эксперт РА с серверной пагинацией через cookie."""
+
+    def __init__(self, session: Optional[requests.Session] = None, get=None, post=None):
+        self.s = session or requests.Session()
+        self.s.headers.update(HEADERS)
+        self._get = get
+        self._post = post
+        self.verify = ru_ca_bundle() or True
+
+    def get(self, url: str) -> str:
+        if self._get:
+            return self._get(url)
+        r = self.s.get(url, timeout=25, verify=self.verify)
+        r.raise_for_status()
+        return r.text
+
+    def set_page(self, page_hash: str, csrf: str) -> None:
+        if self._post:
+            self._post(page_hash, csrf)
+            return
+        self.s.post(RAEXPERT_BASE + "/ratings/index/ajax-set-rating-page-hash/",
+                    data={"rating_page_hash": page_hash, "CSRFAjaxToken": csrf}, timeout=25, verify=self.verify,
+                    headers={"X-Requested-With": "XMLHttpRequest", "Referer": RAEXPERT_BASE + "/ratings/"})
+
+    def load_section(self, url: str, kind: str, max_pages: int = 80) -> list[Rating]:
+        out: list[Rating] = []
+        seen_rows: set[tuple] = set()
+        text = self.get(url)
+        rating_id = None
+        visited: set[int] = {1}
+        queue: list[tuple[int, str]] = []
+
+        def absorb(text: str) -> int:
+            nonlocal rating_id
+            got = parse_table_with_header(text, "Эксперт РА", kind)
+            n = 0
+            for r in got:
+                key = (r.subject, r.rating, r.date, r.kind)
+                if key not in seen_rows:
+                    seen_rows.add(key)
+                    out.append(r)
+                    n += 1
+            for h in _HASH_RE.findall(text):
+                info = decode_page_hash(h)
+                pg = int(info.get("PAGE", 0) or 0)
+                rating_id = rating_id or info.get("RATING_ID")
+                if pg and pg not in visited and all(pg != q[0] for q in queue):
+                    queue.append((pg, h))
+            return n
+
+        absorb(text)
+        pages_done = 1
+        while pages_done < max_pages:
+            if not queue:
+                # пагинатор показывает не все страницы — генерируем следующую
+                if not rating_id:
+                    break
+                nxt = max(visited) + 1
+                queue.append((nxt, encode_page_hash(rating_id, nxt)))
+            queue.sort()
+            pg, h = queue.pop(0)
+            if pg in visited:
+                continue
+            m = _CSRF_RE.search(text)
+            if not m:
+                break
+            visited.add(pg)
+            self.set_page(h, m.group(1))
+            text = self.get(url)
+            n_new = absorb(text)
+            pages_done += 1
+            if n_new == 0:
+                break
+        return out
+
+
+def load_raexpert(max_pages: int = 80, client: Optional[RaexpertClient] = None) -> list[Rating]:
+    client = client or RaexpertClient()
     out: list[Rating] = []
     for key, (kind, url) in RAEXPERT_SECTIONS.items():
-        seen: set[tuple] = set()
-        n_section = 0
-        scheme = None  # какая схема пагинации сработала: ?page=, ?PAGEN_1=, ?p=
-        for page in range(1, max_pages + 1):
-            candidates = [url] if page == 1 else ([f"{url}?{scheme}={page}"] if scheme else
-                                                  [f"{url}?page={page}", f"{url}?PAGEN_1={page}", f"{url}?p={page}"])
-            new: list[Rating] = []
-            for u in candidates:
-                try:
-                    code, _, text = fetch(u)
-                except Exception as e:  # noqa: BLE001
-                    log.warning("Эксперт РА %s: %s", u, e)
-                    continue
-                if code != 200:
-                    continue
-                got = parse_table_with_header(text, "Эксперт РА", kind)
-                new = [r for r in got if (r.subject, r.rating, r.date) not in seen]
-                if new:
-                    if page > 1 and not scheme:
-                        scheme = u.split("?")[1].split("=")[0]
-                    break
-            if not new:
-                break
-            for r in new:
-                seen.add((r.subject, r.rating, r.date))
-            out.extend(new)
-            n_section += len(new)
-        log.info("Эксперт РА %s: %d записей", key, n_section)
+        try:
+            got = client.load_section(url, kind, max_pages=max_pages)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Эксперт РА %s: %s", key, e)
+            continue
+        log.info("Эксперт РА %s: %d записей", key, len(got))
+        out.extend(got)
     return out

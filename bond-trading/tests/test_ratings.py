@@ -155,3 +155,33 @@ def test_parse_raexpert_tables():
     assert rs[0].subject == 'ГОСУДАРСТВЕННАЯ КОМПАНИЯ "АВТОДОР"' and rs[0].rating == "AA+" and rs[0].kind == "issue"
     book = RatingsBook(rs)
     assert book.lookup(Bond(secid="X", name="Автодор4Р1", full_name="Автодор ГК БО-004P-01")).rating == "AA+"
+
+
+def test_raexpert_hash_roundtrip_and_pagination():
+    from bondtrader.data.ratings_web import RaexpertClient, decode_page_hash, encode_page_hash
+    h = "g5MDg2OTM5fFJBVElOR19JRDozMjE5MDIzMHxQQUdFOjI=VElNRToxNz"
+    info = decode_page_hash(h)
+    assert info == {"TIME": "1789086939", "RATING_ID": "32190230", "PAGE": "2"}
+    assert decode_page_hash(encode_page_hash("32190230", 7, ts=1789086939))["PAGE"] == "7"
+
+    def page(n, names, pager_pages):
+        rows = "".join(f'<tr><td><a href="/database/companies/{i}">{nm}</a></td><td>ruBBB</td><td>Стабильный</td><td>0{n}.09.2026</td></tr>' for i, nm in enumerate(names))
+        pager = "".join(f"""<span onclick="setRatingPageHash('{encode_page_hash('42', p, ts=1)}');">{p}</span>""" for p in pager_pages)
+        return f"""<script>var CSRFAjaxTokenPageHash = 'tok';</script><table><thead><tr><th>Объект</th><th>Рейтинг</th><th>Прогноз</th><th>Обновлен</th></tr></thead>{rows}</table><div class="b-paginator">{pager}</div>"""
+
+    state = {"page": 1, "posts": []}
+    pages = {1: page(1, ["А", "Б"], [2, 3]), 2: page(2, ["В"], [1, 3]), 3: page(3, ["Г", "Д"], [1, 2]), 4: page(4, [], [])}
+
+    def fake_get(url):
+        return pages[state["page"]]
+
+    def fake_post(h, csrf):
+        assert csrf == "tok"
+        state["posts"].append(h)
+        state["page"] = int(decode_page_hash(h)["PAGE"])
+
+    c = RaexpertClient(get=fake_get, post=fake_post)
+    rs = c.load_section("https://raexpert.ru/ratings/credits_all/", "issuer")
+    assert [r.subject for r in rs] == ["А", "Б", "В", "Г", "Д"]
+    # страницы 2 и 3 из пагинатора, 4-я сгенерирована и оказалась пустой
+    assert [int(decode_page_hash(h)["PAGE"]) for h in state["posts"]] == [2, 3, 4]
