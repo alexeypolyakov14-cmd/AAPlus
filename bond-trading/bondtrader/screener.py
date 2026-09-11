@@ -235,16 +235,20 @@ class Screener:
             if why:
                 self.rejected[bond.secid] = why
                 continue
-            moex_default = ""
-            if describe is not None and c.exclude_moex_defaults and not bond.is_ofz:
+            if describe is not None and not bond.is_ofz:
                 try:
-                    moex_default = moex_default_flag(describe(bond))
+                    desc = describe(bond)
                 except Exception as e:  # noqa: BLE001
-                    moex_default = ""
+                    desc = {}
                     log.debug("%s: описание MOEX недоступно: %s", bond.secid, e)
-                if moex_default:
-                    self.rejected[bond.secid] = moex_default
+                if c.exclude_floaters and (desc.get("COUPON_BENCHMARK") or "").strip():
+                    self.rejected[bond.secid] = "флоатер"   # купон привязан к бенчмарку (КС, RUONIA) — по описанию ISS
                     continue
+                if c.exclude_moex_defaults:
+                    moex_default = moex_default_flag(desc)
+                    if moex_default:
+                        self.rejected[bond.secid] = moex_default
+                        continue
             flags = []
             if bond.has_offer and bond.offer_date and bond.offer_date > settle:
                 flags.append("оферта")

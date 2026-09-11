@@ -298,3 +298,18 @@ def test_spreads_cli(capsys):
     assert main(["--fixtures", FIX, "spreads", "--top", "5", "--bottom", "2"]) == 0
     out = capsys.readouterr().out
     assert "Спреды к кривой ОФЗ по ступеням" in out and "vs_peers" in out and "За что платят меньше" in out
+
+
+def test_news_stop_requires_issuer_as_subject():
+    from bondtrader.data.news import is_default_subject
+    assert is_default_subject("ООО Ромашка допустила дефолт по облигациям", "Ромашка ООО БО-01")
+    assert is_default_subject("Суд признал банкротом ООО Ромашка", "Ромашка ООО БО-01")
+    assert not is_default_subject("Сбербанк банкротит бетонный завод", "Сбербанк ПАО")          # истец
+    assert not is_default_subject("Рынок считает, что Ромашка обанкротится", "Ромашка ООО")     # спекуляция
+    assert not is_default_subject("ООО Лютик допустил дефолт", "Ромашка ООО")                    # другой эмитент
+    assert score_title("Вытегорец отсудил у «Россетей» неустойку за просрочку")[1] == ["plaintiff"]
+    assert "default" not in score_title("Селектел не выплатил дивиденды за 3 месяца")[1]
+    book = NewsBook([NewsItem(date(2025, 5, 30), "Сбербанк ПАО", "google:РБК", "Сбербанк банкротит бетонный завод", "", "", -0.5, "plaintiff"),
+                     NewsItem(date(2025, 5, 30), "Ромашка ООО", "google:РБК", "ООО Ромашка допустила дефолт по облигациям", "", "", -4.0, "default")])
+    assert book.issuer_score(SETTLE, name="Сбербанк ПАО").stop is None
+    assert book.issuer_score(SETTLE, name="Ромашка ООО БО-01").stop is not None

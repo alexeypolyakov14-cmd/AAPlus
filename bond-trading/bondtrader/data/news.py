@@ -43,7 +43,7 @@ GENERAL_FEEDS = {
 
 # Словарь маркеров: (тег, вес, регулярное выражение). Вес < 0 — риск, > 0 — поддержка.
 LEXICON: list[tuple[str, float, re.Pattern]] = [
-    ("default", -4.0, re.compile(r"дефолт|не (?:выплат|исполн)|просроч|невыплат", re.I)),
+    ("default", -4.0, re.compile(r"дефолт|не (?:выплат|исполн)\w*(?!\w*\s+дивиденд)|просроч(?!\w*\s+(?:неустойк|поставк))|невыплат", re.I)),
     ("bankruptcy", -4.0, re.compile(r"банкрот|несостоятельн|конкурсн\w+ (?:производств|управля)|ликвидац", re.I)),
     ("criminal", -3.0, re.compile(r"обыск|задержан|арестован|уголовн|мошеннич|под стражу|следственн\w+ комитет|\bСКР?\b(?=.*(?:возбуд|дело|обыск|задерж))")),
     ("license", -3.0, re.compile(r"отзыв\w* лиценз|лишил\w* лиценз|аннулир\w* лиценз|исключ\w* из реестра", re.I)),
@@ -63,7 +63,17 @@ LEXICON: list[tuple[str, float, re.Pattern]] = [
 # Блоги/форумы/соцсети: мнения, а не факты — в балл не входят (сохраняются с тегом blog для просмотра)
 BLOG_RE = re.compile(r"smart-?lab|смарт-?лаб|пульс|дзен|dzen|vk\.com|вконтакте|telegram|t\.me|пост инвестора|блог|forum|форум|pikabu|пикабу|"
                      r"投资|investing\.com|tinkoff\.ru/invest|бкс экспресс", re.I)
-STOP_TAGS = {"default", "bankruptcy", "license"}   # одна такая новость из СМИ — стоп-фактор
+STOP_TAGS = {"default", "bankruptcy", "license"}   # одна такая новость из СМИ — стоп-фактор (если эмитент — субъект новости)
+# Спекуляции и обзоры («обанкротится?», «вероятность дефолта», «разбираем») — не факты
+SPECULATIVE_RE = re.compile(r"рынок считает|вероятност|может ли|сможет ли|обанкротится|риск\w* дефолт|угроз\w+|разбира\w+|обзор|сидим, счита|"
+                            r"стоит ли|что будет|почему|как (?:заработать|купить)|топ-?\d|подборк", re.I)
+# Эмитент — истец/инициатор, а не должник: «Сбербанк банкротит завод», «ГТЛК подала иск», «отсудил у Россетей»
+PLAINTIFF_RE = re.compile(r"банкротит|подал\w* (?:иск|заявлени)|отсудил\w* у|взыска\w+ с|требует (?:банкротств|признать)|инициировал\w* банкротств|"
+                          r"добива\w+ банкротств|признать банкротом (?:\S+\s+){0,3}(?:контрагент|заёмщик|должник|подрядчик|застройщик|завод)", re.I)
+# Эмитент — субъект дефолта/банкротства: «X допустил дефолт», «дефолт X», «X признан банкротом», «банкротство X»
+SUBJECT_RE = re.compile(r"допустил\w* (?:технический )?дефолт|призна\w+ банкрот|объявил\w* (?:о )?дефолт|не (?:выплатил|исполнил|погасил)\w*|"
+                        r"техническ\w+ дефолт|дефолт (?:по )?(?:облигац|купон|выпуск)|заявлени\w+ о банкротстве|о признании (?:\S+\s+){0,4}банкротом|"
+                        r"отозва\w+ лиценз|аннулир\w+ лиценз", re.I)
 NOISE_RE = re.compile(r"разме(?:щ|ст)\w+ (?:облигаци|выпуск)|купон\w* ставк|ставк\w* купон|книг\w* заявок|сбор заявок|ориентир", re.I)  # рутина первичного рынка — не сигнал
 
 
@@ -105,11 +115,25 @@ def score_title(title: str, source: str = "") -> tuple[float, list[str]]:
             tags.append(tag)
     if not tags and NOISE_RE.search(t):
         tags.append("routine")
-    if BLOG_RE.search(f"{source} {t}") or "?" in t:
-        # мнения и вопросы («сможет ли расплатиться?») не считаем фактами
+    if BLOG_RE.search(f"{source} {t}") or "?" in t or SPECULATIVE_RE.search(t):
+        # мнения, вопросы и обзоры («сможет ли расплатиться?», «рынок считает…») не считаем фактами
         tags.append("blog")
         score = 0.0
+    elif PLAINTIFF_RE.search(t) and STOP_TAGS & set(tags):
+        # эмитент банкротит/судится с кем-то — это не его дефолт; оставляем лёгкий негатив
+        tags = [x for x in tags if x not in STOP_TAGS] + ["plaintiff"]
+        score = min(score + 4.0, -0.5)
     return score, tags
+
+
+def is_default_subject(title: str, issuer_name: str) -> bool:
+    """Стоп-фактор только если в заголовке назван сам эмитент и речь о его дефолте/банкротстве/лицензии."""
+    t = html.unescape(title or "")
+    if not issuer_match(issuer_name, t):
+        return False
+    if PLAINTIFF_RE.search(t) or SPECULATIVE_RE.search(t):
+        return False
+    return bool(SUBJECT_RE.search(t)) or bool(re.search(r"(?:дефолт|банкротств)\w*\s+(?:\S+\s+){0,2}", t, re.I) and issuer_match(issuer_name, t))
 
 
 # ---------------------------------------------------------------------------
@@ -264,7 +288,8 @@ class NewsBook:
                 ns.negative += 1
                 if ns.worst is None or it.score < ns.worst.score:
                     ns.worst = it
-                if STOP_TAGS & set(it.tags.split(",")) and "blog" not in it.tags and (ns.stop is None or it.date > ns.stop.date):
+                if (STOP_TAGS & set(it.tags.split(",")) and "blog" not in it.tags and "plaintiff" not in it.tags
+                        and is_default_subject(it.title, name or it.query) and (ns.stop is None or it.date > ns.stop.date)):
                     ns.stop = it
             elif it.score > 0:
                 ns.positive += 1
