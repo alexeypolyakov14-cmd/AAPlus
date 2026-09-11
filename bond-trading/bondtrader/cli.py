@@ -370,9 +370,8 @@ def cmd_monitor(args, settings):
     return 0
 
 
-def build_report(args, settings) -> str:
-    """Ежедневный отчёт в Markdown: рынок, портфель, алерты, целевой портфель и ордера, негатив по эмитентам."""
-    from .monitor import worst_level
+def collect_report(args, settings) -> dict:
+    """Все данные для отчёта (рынок, портфель, алерты, цель, ордера) — рендеры: Markdown и Telegram."""
     snap, rows, pf, broker = _build_context(args, settings)
     name, params = _strategy_spec(args, settings)
     st = make_strategy(name, params)
@@ -380,10 +379,23 @@ def build_report(args, settings) -> str:
     by_id = ctx.by_id
     targets, notes = RiskManager(RiskLimits.from_dict(settings.get("risk", default={}))).enforce_targets(st.targets(ctx), by_id)
     reasons = st.explain(ctx)
-    orders = orders_from_targets(pf, targets, by_id, strategy=name, reasons=reasons)
     alerts, all_rows = _alerts(snap, rows, pf, broker, settings)
+    orders = orders_from_targets(pf, targets, all_rows, strategy=name, reasons=reasons)
     risk = RiskManager(RiskLimits.from_dict(settings.get("risk", default={})))
     pr = risk.portfolio_risk(pf, all_rows)
+    marks = {s: (r.metrics.clean_price, r.quote.accrued, r.bond.face_value) for s, r in all_rows.items()}
+    return {"snap": snap, "rows": rows, "pf": pf, "broker": broker, "name": name, "targets": targets, "notes": notes,
+            "reasons": reasons, "orders": orders, "alerts": alerts, "all_rows": all_rows, "by_id": by_id, "pr": pr,
+            "weights": pf.weights(marks)}
+
+
+def build_report(args, settings, data: Optional[dict] = None) -> str:
+    """Ежедневный отчёт в Markdown: рынок, портфель, алерты, целевой портфель и ордера, негатив по эмитентам."""
+    from .monitor import worst_level
+    d = data or collect_report(args, settings)
+    snap, rows, pf, broker, name = d["snap"], d["rows"], d["pf"], d["broker"], d["name"]
+    targets, notes, reasons, orders, alerts, all_rows, by_id, pr = (d["targets"], d["notes"], d["reasons"], d["orders"], d["alerts"],
+                                                                     d["all_rows"], d["by_id"], d["pr"])
     kr = f"{snap.keyrate.current:.2f}% ({snap.keyrate.regime})" if snap.keyrate else "н/д"
     cv = f"1Y {snap.curve.yield_at(1):.2f}% / 3Y {snap.curve.yield_at(3):.2f}% / 10Y {snap.curve.yield_at(10):.2f}%" if snap.curve else "н/д"
     L = []
@@ -457,17 +469,24 @@ def build_report(args, settings) -> str:
 
 
 def cmd_report(args, settings):
-    md = build_report(args, settings)
+    data = collect_report(args, settings)
+    md = build_report(args, settings, data)
     if args.md:
         os.makedirs(os.path.dirname(args.md) or ".", exist_ok=True)
         with open(args.md, "w", encoding="utf-8") as f:
             f.write(md)
         print(f"отчёт сохранён: {args.md}", file=sys.stderr)
+    if args.tg_file or args.telegram:
+        from .report_tg import render_telegram
+        html_text = render_telegram(data)
+        if args.tg_file:
+            with open(args.tg_file, "w", encoding="utf-8") as f:
+                f.write(html_text)
+        if args.telegram:
+            from .notify import telegram_send
+            n = telegram_send(html_text, parse_mode="HTML")
+            print(f"отправлено в Telegram: {n} сообщ.", file=sys.stderr)
     print(md)
-    if args.telegram:
-        from .notify import strip_markdown, telegram_send
-        n = telegram_send(strip_markdown(md))
-        print(f"отправлено в Telegram: {n} сообщ.", file=sys.stderr)
 
 
 def cmd_notify(args, settings):
@@ -485,7 +504,7 @@ def cmd_notify(args, settings):
     text = open(args.file, encoding="utf-8").read() if args.file else (args.text or "")
     if not text.strip():
         raise SystemExit("нечего отправлять: --file или --text")
-    n = telegram_send(strip_markdown(text))
+    n = telegram_send(text, parse_mode="HTML") if args.html else telegram_send(strip_markdown(text))
     print(f"отправлено в Telegram: {n} сообщ.")
 
 
@@ -985,9 +1004,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("report", parents=[common], help="ежедневный отчёт (Markdown): рынок, портфель, алерты, цель, ордера"); screen_opts(sp); strat_opts(sp)
     sp.add_argument("--broker", choices=["paper", "tinvest"]); sp.add_argument("--live", action="store_true")
     sp.add_argument("--md", help="сохранить в файл"); sp.add_argument("--telegram", action="store_true", help="отправить в Telegram (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)")
+    sp.add_argument("--tg-file", help="сохранить Telegram-версию (HTML) в файл")
     sp.set_defaults(fn=cmd_report)
     sp = sub.add_parser("notify", parents=[common], help="отправить текст/файл в Telegram"); sp.add_argument("--file"); sp.add_argument("--text")
-    sp.add_argument("--whoami", action="store_true", help="показать chat_id тех, кто писал боту (для секрета TELEGRAM_CHAT_ID)"); sp.set_defaults(fn=cmd_notify)
+    sp.add_argument("--whoami", action="store_true", help="показать chat_id тех, кто писал боту (для секрета TELEGRAM_CHAT_ID)")
+    sp.add_argument("--html", action="store_true", help="файл уже в HTML-разметке Telegram (report --tg-file)"); sp.set_defaults(fn=cmd_notify)
     sp = sub.add_parser("portfolio", parents=[common], help="состояние портфеля и риск-метрики"); screen_opts(sp)
     sp.add_argument("--broker", choices=["paper", "tinvest"]); sp.set_defaults(fn=cmd_portfolio)
     sp = sub.add_parser("backtest", parents=[common], help="бэктест стратегии на истории MOEX"); screen_opts(sp); strat_opts(sp)

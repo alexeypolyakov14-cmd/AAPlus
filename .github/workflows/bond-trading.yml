@@ -202,7 +202,7 @@ jobs:
       - name: Отчёт (бумажный портфель или песочница T-Invest)
         run: |
           if [ -n "$TINVEST_TOKEN" ]; then BR="--broker tinvest"; else BR=""; fi
-          bondtrader report $BR --md report.md > /dev/null
+          bondtrader report $BR --md report.md --tg-file report_tg.html > /dev/null
           cat report.md >> "$GITHUB_STEP_SUMMARY"
           bondtrader monitor $BR --strict || echo "::warning::есть критические алерты по позициям — см. отчёт"
       - name: Telegram — chat_id (если секрет TELEGRAM_CHAT_ID ещё не задан)
@@ -212,7 +212,7 @@ jobs:
       - name: Telegram
         if: env.TELEGRAM_BOT_TOKEN != '' && env.TELEGRAM_CHAT_ID != ''
         continue-on-error: true
-        run: bondtrader notify --file report.md
+        run: bondtrader notify --file report_tg.html --html
       - uses: actions/upload-artifact@v4
         with:
           name: daily-report

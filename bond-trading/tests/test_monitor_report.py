@@ -84,3 +84,11 @@ risk:
     md = md_path.read_text(encoding="utf-8")
     assert md.startswith("# 🔴") and "## Алерты" in md and "## Позиции" in md and "RU000A103WV8" in md
     assert "Отсев по стоп-факторам" in md and "Негативные новости" in md
+    # Telegram-версия: HTML с <pre>-таблицами, без Markdown-таблиц
+    tg_path = tmp_path / "r.html"
+    assert main(["-c", str(cfg), "--fixtures", FIX, "report", "-s", "carry", "--tg-file", str(tg_path)]) == 0
+    tg = tg_path.read_text(encoding="utf-8")
+    assert tg.startswith("🔴 <b>bondtrader") and "<pre>" in tg and "|---" not in tg and "P&amp;L" in tg and "Алерты" in tg
+    from bondtrader.notify import _split
+    parts = _split(tg, limit=600)
+    assert all(len(p) <= 600 for p in parts) and all(p.count("<pre>") == p.count("</pre>") for p in parts)

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Optional
 
 import requests
@@ -39,7 +40,8 @@ def telegram_whoami(token: Optional[str] = None, timeout: float = 20) -> tuple[s
     return bot, list(chats.values())
 
 
-def telegram_send(text: str, token: Optional[str] = None, chat_id: Optional[str] = None, timeout: float = 20) -> int:
+def telegram_send(text: str, token: Optional[str] = None, chat_id: Optional[str] = None, timeout: float = 20,
+                  parse_mode: Optional[str] = None) -> int:
     """Отправляет текст (при необходимости — несколькими сообщениями). Возвращает число отправленных сообщений."""
     token = (token or os.environ.get("TELEGRAM_BOT_TOKEN", "")).strip()
     chat_id = (chat_id or os.environ.get("TELEGRAM_CHAT_ID", "")).strip()
@@ -48,25 +50,42 @@ def telegram_send(text: str, token: Optional[str] = None, chat_id: Optional[str]
     parts = _split(text)
     for i, part in enumerate(parts, 1):
         body = {"chat_id": chat_id, "text": part, "disable_web_page_preview": True}
+        if parse_mode:
+            body["parse_mode"] = parse_mode
         r = requests.post(TG_API.format(token=token), json=body, timeout=timeout)
+        if r.status_code != 200 and parse_mode:
+            # разметка не прошла валидацию Telegram — отправляем как есть, без форматирования
+            log.warning("Telegram отклонил разметку (%s), отправляю без parse_mode", r.text[:120])
+            body.pop("parse_mode", None)
+            body["text"] = re.sub(r"<[^>]+>", "", part)
+            r = requests.post(TG_API.format(token=token), json=body, timeout=timeout)
         if r.status_code != 200:
             raise RuntimeError(f"Telegram: HTTP {r.status_code} {r.text[:200]}")
     return len(parts)
 
 
 def _split(text: str, limit: int = CHUNK) -> list[str]:
-    """Режем по строкам, чтобы таблицы не рвались посреди строки."""
+    """Режем по блокам (разделитель — пустая строка), чтобы <pre>-таблицы не рвались; блок длиннее лимита — по строкам."""
+    blocks = text.split("\n\n")
     parts, cur = [], ""
-    for line in text.splitlines(keepends=True):
-        if len(cur) + len(line) > limit and cur:
-            parts.append(cur)
-            cur = ""
-        while len(line) > limit:            # очень длинная строка — режем жёстко
-            parts.append(line[:limit]); line = line[limit:]
-        cur += line
-    if cur:
+    for block in blocks:
+        piece = block + "\n\n"
+        if len(piece) > limit:
+            if cur:
+                parts.append(cur); cur = ""
+            for line in piece.splitlines(keepends=True):
+                if len(cur) + len(line) > limit and cur:
+                    parts.append(cur); cur = ""
+                while len(line) > limit:
+                    parts.append(line[:limit]); line = line[limit:]
+                cur += line
+            continue
+        if len(cur) + len(piece) > limit and cur:
+            parts.append(cur); cur = ""
+        cur += piece
+    if cur.strip():
         parts.append(cur)
-    return parts or [""]
+    return [p.rstrip("\n") for p in parts] or [""]
 
 
 def strip_markdown(md: str) -> str:
