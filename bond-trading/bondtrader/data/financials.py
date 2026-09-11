@@ -41,10 +41,72 @@ EDISCLOSURE_CANDIDATES = {
 }
 
 
+def fetch_json(url: str, timeout: float = 25) -> tuple[int, str, str]:
+    """GET с Accept: application/json (SPA-бэкенды отдают JSON только по этому заголовку)."""
+    from .tls import ru_ca_bundle
+    h = dict(HEADERS)
+    h["Accept"] = "application/json, text/plain, */*"
+    h["X-Requested-With"] = "XMLHttpRequest"
+    r = requests.get(url, headers=h, timeout=timeout, verify=ru_ca_bundle() or True)
+    return r.status_code, r.headers.get("Content-Type", ""), r.text
+
+
+def discover_bundle(base: str = GIRBO_BASE, index_path: str = "/") -> list[str]:
+    """Скачивает JS-бандл SPA и вытаскивает из него пути внутреннего API."""
+    code, _, html_text = fetch(base + index_path)
+    scripts = re.findall(r'src="(/static/js/[^"]+\.js)"', html_text)
+    paths: set[str] = set()
+    for sc in scripts[:3]:
+        try:
+            _, _, js = fetch(base + sc)
+        except Exception as e:  # noqa: BLE001
+            print(f"   bundle {sc}: ERROR {e}")
+            continue
+        for m in re.findall(r"""["'`](/(?:nbo|api|advanced-search|bfo|organizations|search)[^"'`\s]{2,120})["'`]""", js):
+            paths.add(m)
+        for m in re.findall(r"""["'`](https?://[^"'`\s]*nalog[^"'`\s]{0,80})["'`]""", js):
+            paths.add(m)
+        print(f"   bundle {sc}: {len(js)} bytes, api-like paths: {sorted(paths)[:60]}")
+    return sorted(paths)
+
+
+MOEX_DEFAULTS_CANDIDATES = [
+    "https://www.moex.com/ru/listing/emitent-defaults.aspx",
+    "https://www.moex.com/ru/listing/default.aspx",
+    "https://www.moex.com/s2830",
+    "https://iss.moex.com/iss/securitygroups/stock_bonds/collections.json",
+]
+
+
 def discover(query: str = "Балтийский лизинг") -> None:
     """Печатает структуру ответов ГИР БО и e-disclosure для одного эмитента."""
     from urllib.parse import quote
     q = quote(query)
+    print("== girbo: пути API из JS-бандла")
+    try:
+        discover_bundle()
+    except Exception as e:  # noqa: BLE001
+        print(f"   ERROR {e}")
+    for name, tpl in GIRBO_CANDIDATES.items():
+        if "{id}" in tpl:
+            continue
+        url = tpl.format(q=q)
+        try:
+            code, ctype, text = fetch_json(url)
+            print(f"== girbo:{name} (Accept: json) {url}\n   HTTP {code} {ctype} len={len(text)}\n   head: " + re.sub(r"\s+", " ", text[:1200]))
+        except Exception as e:  # noqa: BLE001
+            print(f"== girbo:{name} (Accept: json) ERROR {e}")
+    for url in MOEX_DEFAULTS_CANDIDATES:
+        try:
+            code, ctype, text = fetch(url)
+            title = re.search(r"<title>(.*?)</title>", text, re.S | re.I)
+            print(f"== moex-defaults {url}\n   HTTP {code} {ctype} len={len(text)} title={title.group(1).strip()[:80] if title else '-'}")
+            body = re.sub(r"<script.*?</script>|<style.*?</style>", " ", text, flags=re.S | re.I)
+            body = re.sub(r"<[^>]+>", " ", body)
+            i = body.lower().find("дефолт")
+            print("   sample: " + re.sub(r"\s+", " ", body[max(0, i - 200): i + 800]))
+        except Exception as e:  # noqa: BLE001
+            print(f"== moex-defaults {url}\n   ERROR {e}")
     for name, tpl in GIRBO_CANDIDATES.items():
         if "{id}" in tpl:
             continue
