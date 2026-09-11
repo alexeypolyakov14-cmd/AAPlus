@@ -29,11 +29,15 @@ on:
         description: "Почему бумага (не) в скрине: часть названия эмитента, SECID или ISIN (напр. НЛМК)"
         type: string
         default: ""
+      cmd:
+        description: "Произвольная команда bondtrader под профилем hy (напр. signals -s gspread -p top_n=10)"
+        type: string
+        default: ""
       strategy:
         description: "Стратегия для песочницы"
         type: choice
         default: carry
-        options: [carry, value_hy, ladder, rate_cycle, spread]
+        options: [carry, value_hy, gspread, ladder, rate_cycle, spread]
       profile:
         description: "Профиль настроек для песочницы"
         type: choice
@@ -295,12 +299,13 @@ jobs:
           bondtrader bot $BR $MENU
 
   lookup:
-    name: Почему бумага (не) в скрине (профиль hy)
+    name: Разовая команда под профилем hy (lookup / cmd)
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' && inputs.lookup != ''
+    if: github.event_name == 'workflow_dispatch' && (inputs.lookup != '' || inputs.cmd != '')
     env:
       BONDTRADER_CONFIG: configs/hy.yaml
       LOOKUP: ${{ inputs.lookup }}
+      CMD: ${{ inputs.cmd }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -323,14 +328,21 @@ jobs:
             daily-books-
             credit-books-
       - name: Выпуски и статус в скрине
+        if: env.LOOKUP != ''
         run: |
           set -o pipefail
           bondtrader why "$LOOKUP" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Команда
+        if: env.CMD != ''
+        run: |
+          set -o pipefail
+          # shellcheck disable=SC2086
+          bondtrader $CMD | tee -a "$GITHUB_STEP_SUMMARY"
 
   sandbox:
     name: Песочница T-Invest (ручной запуск, нужен секрет TINVEST_TOKEN)
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' && !inputs.bot && !inputs.telegram_setup && inputs.lookup == ''
+    if: github.event_name == 'workflow_dispatch' && !inputs.bot && !inputs.telegram_setup && inputs.lookup == '' && inputs.cmd == ''
     env:
       TINVEST_TOKEN: ${{ secrets.TINVEST_TOKEN }}
       BONDTRADER_CONFIG: ${{ inputs.profile == 'default' && 'config.yaml' || format('configs/{0}.yaml', inputs.profile) }}

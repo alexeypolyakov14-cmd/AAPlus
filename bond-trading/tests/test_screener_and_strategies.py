@@ -186,3 +186,24 @@ def test_portfolio_accounting():
     assert pf.nav({}) == pytest.approx(pf.cash)
     d = pf.to_dict()
     assert Portfolio.from_dict(d).cash == pf.cash
+
+
+def test_gspread_strategy_ranks_by_spread():
+    from bondtrader.cli import build_parser
+    from bondtrader.config import Settings
+    from bondtrader.cli import _build_context
+    from bondtrader.strategies import MarketContext, make_strategy
+    import os
+    fix = os.path.join(os.path.dirname(__file__), "fixtures")
+    args = build_parser().parse_args(["--fixtures", fix, "signals", "-s", "gspread"])
+    snap, rows, pf, _ = _build_context(args, Settings.load(None))
+    st = make_strategy("gspread", {"top_n": 3, "per_issuer": 1, "ofz_min_share": 0.1})
+    ctx = MarketContext(snap.settle, rows, snap.curve, snap.keyrate, pf)
+    w = st.targets(ctx)
+    corp = [s for s in w if not ctx.by_id[s].bond.is_ofz]
+    assert 1 <= len(corp) <= 3 and abs(sum(w.values()) - 1.0) < 1e-9
+    spreads = [ctx.by_id[s].metrics.g_spread for s in corp]
+    assert spreads == sorted(spreads, reverse=True)
+    best = max((r.metrics.g_spread for r in rows if not r.bond.is_ofz and not r.bond.is_floater and r.metrics.g_spread is not None), default=None)
+    assert best is None or spreads[0] == best
+    assert all("G-спред" in st.explain(ctx)[s] for s in corp)

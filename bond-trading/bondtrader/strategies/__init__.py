@@ -4,6 +4,7 @@ from .spread import SpreadMeanReversionStrategy
 from .rate_cycle import RateCycleStrategy
 from .carry import CarryRollDownStrategy
 from .value_hy import ValueHYStrategy
+from .gspread import GSpreadStrategy
 
 STRATEGIES = {
     "ladder": LadderStrategy,
@@ -11,6 +12,7 @@ STRATEGIES = {
     "rate_cycle": RateCycleStrategy,
     "carry": CarryRollDownStrategy,
     "value_hy": ValueHYStrategy,
+    "gspread": GSpreadStrategy,
 }
 
 
@@ -30,5 +32,5 @@ def make_strategy(name: str, params: dict | None = None) -> Strategy:
 
 __all__ = [
     "MarketContext", "Signal", "Strategy", "Side", "STRATEGIES", "make_strategy",
-    "LadderStrategy", "SpreadMeanReversionStrategy", "RateCycleStrategy", "CarryRollDownStrategy", "ValueHYStrategy",
+    "LadderStrategy", "SpreadMeanReversionStrategy", "RateCycleStrategy", "CarryRollDownStrategy", "ValueHYStrategy", "GSpreadStrategy",
 ]
