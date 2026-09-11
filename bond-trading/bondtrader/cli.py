@@ -664,6 +664,14 @@ def cmd_ratings(args, settings):
         before = len(book)
         got: list = []
         sources = args.sources or ["nkr", "raexpert", "acra"]
+        # реестры (Эксперт РА, НКР) — полное актуальное состояние: старые записи этих агентств выбрасываем,
+        # иначе в книге копятся отозванные и устаревшие рейтинги; пресс-релизы АКРА — накопительно
+        if not args.accumulate:
+            for src, agency in (("raexpert", "Эксперт РА"), ("nkr", "НКР")):
+                if src in sources:
+                    dropped = book.drop_agency(agency)
+                    if dropped:
+                        print(f"{agency}: перезагрузка реестра, старых записей убрано {dropped}", file=sys.stderr)
         if "nkr" in sources:
             got += load_nkr_tables()           # актуальное состояние — таблицы эмитентов/эмиссий
             if args.press:
@@ -726,6 +734,45 @@ def cmd_ratings(args, settings):
         print(f"Книга рейтингов: {len(book)} записей")
         print(pd.DataFrame([{"subject": r.subject, "agency": r.agency, "rating": r.rating, "date": r.date, "kind": r.kind,
                              "isin": r.isin, "alias": r.alias} for r in book.all]).to_string(index=False) if len(book) else "(пусто)")
+        return
+    if args.action == "audit":
+        # единый источник: у кого из скрина есть рейтинг Эксперт РА, у кого только запасной, где агентства расходятся, где запись старая
+        from .data.ratings import GRADE
+        snap = load_snapshot(settings, args.fixtures)
+        rows = [r for r in _screen(snap, settings, args) if not r.bond.is_ofz]
+        recs = []
+        seen_issuers = set()
+        for r in rows:
+            key = r.bond.issuer_key
+            if key in seen_issuers:
+                continue
+            seen_issuers.add(key)
+            latest = book.latest_by_agency(r.bond)
+            prim = latest.get(book.primary)
+            chosen = r.rating
+            grades = {ag: GRADE.get(x.rating) for ag, x in latest.items() if GRADE.get(x.rating) is not None}
+            spread_notches = (max(grades.values()) - min(grades.values())) if len(grades) >= 2 else 0
+            age = (snap.settle - chosen.date).days if chosen is not None and chosen.date else None
+            flags = []
+            if chosen is None:
+                flags.append("нет рейтинга")
+            elif prim is None:
+                flags.append(f"нет у {book.primary}, взят {chosen.agency}")
+            if spread_notches >= 2:
+                flags.append(f"агентства расходятся на {spread_notches} ступ.")
+            if age is not None and age > 365:
+                flags.append(f"запись старше года ({age} дн.)")
+            recs.append({"issuer": key, "name": r.bond.name, "rating": chosen.rating if chosen else "—", "agency": chosen.agency if chosen else "",
+                         "date": chosen.date if chosen else None, "others": "; ".join(f"{ag} {x.rating}" for ag, x in latest.items() if chosen is None or ag != chosen.agency),
+                         "flags": "; ".join(flags)})
+        df = pd.DataFrame(recs)
+        n_prim = sum(1 for x in recs if x["agency"] == book.primary)
+        n_fb = sum(1 for x in recs if x["agency"] and x["agency"] != book.primary)
+        n_none = sum(1 for x in recs if not x["agency"])
+        print(f"Эмитентов в скрине: {len(recs)}; рейтинг {book.primary}: {n_prim}; только запасное агентство: {n_fb}; без рейтинга: {n_none}")
+        if args.problems:
+            df = df[df["flags"] != ""]
+        _print_df(df.sort_values(["flags", "issuer"], ascending=[False, True]), csv=args.csv)
         return
     if args.action == "coverage":
         snap = load_snapshot(settings, args.fixtures)
@@ -811,6 +858,45 @@ def cmd_financials(args, settings):
         print(f"  покрытие процентов {f(m.interest_coverage)}x  чистый долг/EBIT {f(m.net_debt_to_ebit)}x  обязательства/капитал {f(m.liabilities_to_equity)}x  "
               f"текущая ликвидность {f(m.current_ratio)}  деньги/короткий долг {f(m.cash_to_short_debt)}")
         print("  флаги: " + ("; ".join(m.flags) if m.flags else "нет"))
+        return
+    if args.action == "audit":
+        # единый источник: у кого из скрина есть рейтинг Эксперт РА, у кого только запасной, где агентства расходятся, где запись старая
+        from .data.ratings import GRADE
+        snap = load_snapshot(settings, args.fixtures)
+        rows = [r for r in _screen(snap, settings, args) if not r.bond.is_ofz]
+        recs = []
+        seen_issuers = set()
+        for r in rows:
+            key = r.bond.issuer_key
+            if key in seen_issuers:
+                continue
+            seen_issuers.add(key)
+            latest = book.latest_by_agency(r.bond)
+            prim = latest.get(book.primary)
+            chosen = r.rating
+            grades = {ag: GRADE.get(x.rating) for ag, x in latest.items() if GRADE.get(x.rating) is not None}
+            spread_notches = (max(grades.values()) - min(grades.values())) if len(grades) >= 2 else 0
+            age = (snap.settle - chosen.date).days if chosen is not None and chosen.date else None
+            flags = []
+            if chosen is None:
+                flags.append("нет рейтинга")
+            elif prim is None:
+                flags.append(f"нет у {book.primary}, взят {chosen.agency}")
+            if spread_notches >= 2:
+                flags.append(f"агентства расходятся на {spread_notches} ступ.")
+            if age is not None and age > 365:
+                flags.append(f"запись старше года ({age} дн.)")
+            recs.append({"issuer": key, "name": r.bond.name, "rating": chosen.rating if chosen else "—", "agency": chosen.agency if chosen else "",
+                         "date": chosen.date if chosen else None, "others": "; ".join(f"{ag} {x.rating}" for ag, x in latest.items() if chosen is None or ag != chosen.agency),
+                         "flags": "; ".join(flags)})
+        df = pd.DataFrame(recs)
+        n_prim = sum(1 for x in recs if x["agency"] == book.primary)
+        n_fb = sum(1 for x in recs if x["agency"] and x["agency"] != book.primary)
+        n_none = sum(1 for x in recs if not x["agency"])
+        print(f"Эмитентов в скрине: {len(recs)}; рейтинг {book.primary}: {n_prim}; только запасное агентство: {n_fb}; без рейтинга: {n_none}")
+        if args.problems:
+            df = df[df["flags"] != ""]
+        _print_df(df.sort_values(["flags", "issuer"], ascending=[False, True]), csv=args.csv)
         return
     if args.action == "coverage":
         snap = load_snapshot(settings, args.fixtures)
@@ -1129,12 +1215,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--days", type=int, default=120); sp.add_argument("--negative", action="store_true", help="list: только негатив"); sp.add_argument("--top", type=int, default=60)
     screen_opts(sp); sp.set_defaults(fn=cmd_news)
     sp = sub.add_parser("ratings", parents=[common], help="кредитные рейтинги: list | show SECID | coverage | discover")
-    sp.add_argument("action", choices=["list", "show", "match", "coverage", "discover", "fetch"]); sp.add_argument("secid", nargs="?", help="для show/match: SECID/ISIN/часть названия (match — несколько через запятую)")
+    sp.add_argument("action", choices=["list", "show", "match", "coverage", "audit", "discover", "fetch"]); sp.add_argument("secid", nargs="?", help="для show/match: SECID/ISIN/часть названия (match — несколько через запятую)")
     sp.add_argument("--names", nargs="*", help="для discover: какие источники смотреть (для --deep: список URL)")
     sp.add_argument("--deep", action="store_true", help="для discover: формы, пагинация, ajax")
     sp.add_argument("--pages", type=int, default=3, help="для fetch --press: сколько страниц пресс-релизов НКР")
     sp.add_argument("--press", action="store_true", help="для fetch: дополнительно разобрать пресс-релизы НКР")
-    sp.add_argument("--sources", nargs="*", choices=["nkr", "raexpert", "acra"], help="для fetch: источники (по умолчанию все)"); screen_opts(sp); sp.set_defaults(fn=cmd_ratings)
+    sp.add_argument("--sources", nargs="*", choices=["nkr", "raexpert", "acra"], help="для fetch: источники (по умолчанию все)")
+    sp.add_argument("--accumulate", action="store_true", help="для fetch: не выбрасывать старые записи реестров Эксперт РА/НКР")
+    sp.add_argument("--problems", action="store_true", help="для audit: только эмитенты с замечаниями")
+    sp.add_argument("--csv"); screen_opts(sp); sp.set_defaults(fn=cmd_ratings)
     sp = sub.add_parser("signals", parents=[common], help="целевой портфель и ордера по стратегии"); screen_opts(sp); strat_opts(sp)
     sp.add_argument("--broker", choices=["paper", "tinvest"]); sp.add_argument("--csv"); sp.set_defaults(fn=cmd_signals)
     sp = sub.add_parser("trade", parents=[common], help="исполнить ребалансировку через брокера"); screen_opts(sp); strat_opts(sp)

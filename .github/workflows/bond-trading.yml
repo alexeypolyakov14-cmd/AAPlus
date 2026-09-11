@@ -325,8 +325,8 @@ jobs:
           cache: pip
           cache-dependency-path: bond-trading/requirements.txt
       - run: pip install -e .
-      - name: Книги (кэш) — рейтинги, новости, отчётность, факты
-        uses: actions/cache/restore@v4
+      - name: Книги (кэш) — рейтинги, новости, отчётность, факты (сохраняются после команды, напр. ratings fetch)
+        uses: actions/cache@v4
         with:
           path: |
             bond-trading/data/ratings.csv
@@ -334,7 +334,7 @@ jobs:
             bond-trading/data/financials.csv
             bond-trading/data/issuers.csv
             bond-trading/data/disclosure.csv
-          key: books-none
+          key: books-${{ github.run_id }}
           restore-keys: |
             books-
             daily-books-

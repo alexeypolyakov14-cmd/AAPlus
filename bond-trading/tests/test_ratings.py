@@ -36,8 +36,8 @@ def test_book_lookup_priority_and_conservative(tmp_path):
     ])
     b = Bond(secid="RU000A10ATW2", name="БалтЛизП15", isin="RU000A10ATW2")
     r = book.lookup(b)
-    assert r.rating == "A+" and r.agency == "Эксперт РА"   # худший из свежих по агентствам
-    assert RatingsBook(book.all, conservative=False).lookup(b).rating == "AA-"
+    assert r.rating == "A+" and r.agency == "Эксперт РА"   # единый источник — Эксперт РА (policy=primary)
+    assert RatingsBook(book.all, conservative=False, policy="worst").lookup(b).rating == "AA-"   # policy=worst, conservative=False — лучший
     # ISIN важнее псевдонима
     assert book.lookup(Bond(secid="RU000A10BJX9", name="БалтЛизП16", isin="RU000A10BJX9")).rating == "BBB"
     # emitter_id важнее псевдонима
@@ -272,3 +272,20 @@ def test_issuer_same_allows_one_extra_subject_word():
     assert issuer_same('ООО ПКО "АЙДИ КОЛЛЕКТ"', "АйДи Коллект 001P-09") == 1.0
     assert issuer_same('АО "ГК "ПИОНЕР"', "Пионер-Лизинг БО8") == 0
     assert issuer_same("ООО «СГ РУС»", "РусГидро БО-002Р-13") == 0
+
+
+def test_primary_agency_policy():
+    from datetime import date
+    from bondtrader.data.ratings import Rating, RatingsBook
+    from bondtrader.models import Bond
+    recs = [Rating('ООО "ЛИЗИНГ-ТРЕЙД"', "Эксперт РА", "BB+", date(2026, 6, 3)),
+            Rating('ООО "ЛИЗИНГ-ТРЕЙД"', "НКР", "BB-", date(2026, 7, 1)),
+            Rating('ООО "ЛИЗИНГ-ТРЕЙД"', "АКРА", "BBB-", date(2026, 5, 1))]
+    b = Bond("X", name="ЛТрейд 1P", full_name="Лизинг-Трейд 001P-01")
+    assert RatingsBook(recs, policy="primary").lookup(b).rating == "BB+"          # единый источник — Эксперт РА
+    assert RatingsBook(recs, policy="worst").lookup(b).rating == "BB-"            # старое правило — худший из всех
+    only_nkr = RatingsBook([recs[1], recs[2]], policy="primary")
+    assert only_nkr.lookup(b).agency == "НКР"                                       # запасной порядок: НКР, потом АКРА
+    assert set(RatingsBook(recs).latest_by_agency(b)) == {"Эксперт РА", "НКР", "АКРА"}
+    book = RatingsBook(recs)
+    assert book.drop_agency("Эксперт РА") == 1 and len(book) == 2 and book.lookup(b).agency == "НКР"

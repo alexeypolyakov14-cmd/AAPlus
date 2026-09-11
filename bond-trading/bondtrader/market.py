@@ -49,7 +49,10 @@ def load_ratings(settings: Settings) -> Optional[RatingsBook]:
     path = settings.get("data", "ratings_csv", default="")
     if not path:
         return None
-    book = RatingsBook.from_csv(path, conservative=settings.get("data", "ratings_conservative", default=True))
+    book = RatingsBook.from_csv(path, conservative=settings.get("data", "ratings_conservative", default=True),
+                                policy=settings.get("data", "ratings_policy", default="primary"),
+                                primary=settings.get("data", "ratings_primary", default=""),
+                                fallback=settings.get("data", "ratings_fallback", default=None))
     return book if len(book) else None
 
 

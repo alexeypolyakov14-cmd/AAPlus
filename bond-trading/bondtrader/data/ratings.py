@@ -87,8 +87,15 @@ class Rating:
 class RatingsBook:
     """Коллекция рейтингов с поиском по бумаге."""
 
-    def __init__(self, ratings: Iterable[Rating] = (), conservative: bool = True):
-        self.conservative = conservative   # при нескольких агентствах брать худший рейтинг
+    PRIMARY = "Эксперт РА"                 # единый источник: реестр Эксперт РА (полное актуальное состояние, не пресс-релизы)
+    FALLBACK = ("НКР", "АКРА")             # только если у Эксперт РА рейтинга нет; агентство видно в rating_str
+
+    def __init__(self, ratings: Iterable[Rating] = (), conservative: bool = True, policy: str = "primary",
+                 primary: str = "", fallback: Optional[list] = None):
+        self.conservative = conservative   # policy=worst: при нескольких агентствах брать худший рейтинг
+        self.policy = policy               # primary | worst
+        self.primary = primary or self.PRIMARY
+        self.fallback = list(fallback) if fallback else list(self.FALLBACK)
         self.by_isin: dict[str, list[Rating]] = {}
         self.by_emitter: dict[str, list[Rating]] = {}
         self.by_alias: list[tuple[str, Rating]] = []
@@ -147,12 +154,38 @@ class RatingsBook:
             if cur is None or (r.date or date.min) > (cur.date or date.min):
                 latest[r.agency] = r
         pool = list(latest.values())
+        if self.policy == "primary":
+            if self.primary in latest:
+                return latest[self.primary]
+            for ag in self.fallback:
+                if ag in latest:
+                    return latest[ag]
+            return max(pool, key=lambda r: r.grade)
         return max(pool, key=lambda r: r.grade) if self.conservative else min(pool, key=lambda r: r.grade)
+
+    def latest_by_agency(self, bond: Bond, emitter_id: Optional[str] = None) -> dict[str, Rating]:
+        """Свежая запись каждого агентства по бумаге — для аудита расхождений."""
+        latest: dict[str, Rating] = {}
+        for r in self.candidates(bond, emitter_id):
+            cur = latest.get(r.agency)
+            if cur is None or (r.date or date.min) > (cur.date or date.min):
+                latest[r.agency] = r
+        return latest
+
+    def drop_agency(self, agency: str) -> int:
+        """Убрать все записи агентства (перед полной перезагрузкой его реестра)."""
+        keep = [r for r in self.all if r.agency != agency]
+        n = len(self.all) - len(keep)
+        self.by_isin.clear(); self.by_emitter.clear(); self.by_alias.clear(); self.by_subject.clear(); self.all.clear()
+        for r in keep:
+            self.add(r)
+        return n
 
     # ---- загрузка ----
     @classmethod
-    def from_csv(cls, path: str, conservative: bool = True) -> "RatingsBook":
-        book = cls(conservative=conservative)
+    def from_csv(cls, path: str, conservative: bool = True, policy: str = "primary", primary: str = "",
+                 fallback: Optional[list] = None) -> "RatingsBook":
+        book = cls(conservative=conservative, policy=policy, primary=primary, fallback=fallback)
         if not os.path.exists(path):
             log.warning("файл рейтингов %s не найден — скринер работает без рейтингов", path)
             return book

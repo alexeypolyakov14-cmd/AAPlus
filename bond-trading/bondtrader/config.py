@@ -14,6 +14,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "keyrate_from": "2013-09-13",
         "ratings_csv": "data/ratings.csv",
         "ratings_conservative": True,
+        "ratings_policy": "primary",      # primary — единый источник (Эксперт РА), остальные агентства только как запасные; worst — худший из всех
+        "ratings_primary": "Эксперт РА",
+        "ratings_fallback": ["НКР", "АКРА"],
         "financials_csv": "data/financials.csv",     # книга отчётности (ГИР БО), длинный формат
         "financials_cache": "data/financials",       # сырые ответы ГИР БО по ИНН
         "issuers_csv": "data/issuers.csv",           # карта эмитент -> ИНН/сектор
