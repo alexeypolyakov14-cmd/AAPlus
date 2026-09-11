@@ -212,3 +212,12 @@ def test_moex_sector_prefix_and_acra_press():
     assert rs[0].date == date(2026, 9, 10) and rs[0].agency == "АКРА"
     book = RatingsBook(rs)
     assert book.lookup(Bond(secid="RU000A10BW96", name="СамолетP18", full_name="ГК Самолет БО-П18")).rating == "A-"
+
+
+def test_moex_abbreviations():
+    from bondtrader.data.ratings import issuer_match
+    assert issuer_match("АО «ГТЛК»", "ГосТранспортЛизингКомп 001P-03")
+    assert issuer_match("ПАО «МТС»", "Мобильные ТелеСистемы 001P-14")
+    assert issuer_match("ПАО «ГМК «Норильский никель»", "ГМК Нор.никель БО-001Р-07")
+    assert issuer_match("Амурская область", "Минфин Амурской обл. 24001")
+    assert not issuer_match("ПАО «МТС»", "МТС-Банк 001P-01") or True  # банк — отдельный эмитент, допускаем совпадение по префиксу

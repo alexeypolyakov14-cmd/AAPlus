@@ -61,7 +61,13 @@ jobs:
       - name: Разведка сайтов рейтинговых агентств (формы, пагинация, ajax)
         continue-on-error: true
         run: bondtrader ratings discover --deep
-      - name: Рейтинги НКР + Эксперт РА -> data/ratings.csv, покрытие скрина
+      - name: Книга рейтингов из предыдущих прогонов (кэш)
+        uses: actions/cache@v4
+        with:
+          path: bond-trading/data/ratings.csv
+          key: ratings-csv-${{ github.run_id }}
+          restore-keys: ratings-csv-
+      - name: Рейтинги НКР + Эксперт РА + АКРА -> data/ratings.csv (накопительно), покрытие скрина
         continue-on-error: true
         run: |
           bondtrader ratings fetch -v 2>&1 | grep -v DEBUG

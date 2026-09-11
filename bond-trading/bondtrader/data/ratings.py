@@ -194,9 +194,24 @@ _LEGAL_RE = re.compile(r"\b(ооо|ао|пао|зао|оао|нао|ип|мка�
 _STOP = {"бо", "бо-п", "серии", "серия", "выпуск", "выпуска", "облигаций", "облигации", "биржевых", "биржевые", "и"}
 
 
+# Сокращения в кратких именах MOEX -> как эмитент называется у агентств
+MOEX_ISSUER_ALIASES = {
+    "гостранспортлизингкомп": "гтлк",
+    "мобильные телесистемы": "мтс",
+    "гмк нор.никель": "гмк норильский никель",
+    "гмк норникель": "гмк норильский никель",
+    "деп финансов янао": "ямало-ненецкий автономный округ",
+    "минфин амурской обл.": "амурская область",
+    "евразхолдинг финанс": "евраз",
+}
+
+
 def issuer_tokens(name: str) -> list[str]:
     """Существенные слова названия эмитента без организационно-правовой формы и кавычек."""
     s = (name or "").lower().replace("ё", "е")
+    for k, v in MOEX_ISSUER_ALIASES.items():
+        if k in s:
+            s = s.replace(k, v)
     s = re.sub(r"[«»\"'().,;:/\\-]", " ", s)
     s = _LEGAL_RE.sub(" ", s)
     toks = []
@@ -224,11 +239,15 @@ def issuer_match(subject: str, full_name: str) -> bool:
     ft = set(issuer_tokens(full_name))
     if not st or not ft:
         return False
-    # допускаем усечения: «Балтийский лизинг» vs «Балт. лизинг» — сравниваем по префиксам из 6 букв
-    def key(t: str) -> str:
-        return t[:6]
-    fk = {key(t) for t in ft}
-    if all(key(t) in fk for t in st):
+    # допускаем усечения: «Балтийский лизинг» vs «Балт. лизинг», «Нор.никель» vs «Норильский никель»
+    def hit(t: str) -> bool:
+        for f in ft:
+            if f[:6] == t[:6]:
+                return True
+            if len(f) <= 4 and t.startswith(f) or len(t) <= 4 and f.startswith(t):
+                return True
+        return False
+    if all(hit(t) for t in st):
         return True
     core = [t for t in st if not _GENERIC_RE.match(t)]
-    return bool(core) and len(core) < len(st) and all(key(t) in fk for t in core)
+    return bool(core) and len(core) < len(st) and all(hit(t) for t in core)
