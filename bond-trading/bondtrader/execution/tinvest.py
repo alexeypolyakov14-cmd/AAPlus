@@ -211,8 +211,14 @@ class TInvestBroker:
             return True, f"статус недоступен: {e}"  # не блокируем: биржа сама отклонит
         status = g(r, "trading_status", default="") or ""
         api_ok = bool(g(r, "api_trade_available_flag", default=True))
-        ok = status == "SECURITY_TRADING_STATUS_NORMAL_TRADING" and api_ok
-        return ok, status
+        limit_ok = bool(g(r, "limit_order_available_flag", default=True))
+        ok = status == "SECURITY_TRADING_STATUS_NORMAL_TRADING" and api_ok and limit_ok
+        detail = status.replace("SECURITY_TRADING_STATUS_", "")
+        if not api_ok:
+            detail += ", API-торговля недоступна (бумага для квалифицированных инвесторов или закрыта брокером)"
+        elif not limit_ok:
+            detail += ", лимитные заявки недоступны"
+        return ok, detail
 
     def last_price(self, bond: Bond) -> Optional[float]:
         inst = self.instrument(bond)

@@ -136,8 +136,9 @@ class RiskManager:
         # лимит на сектор (кроме ОФЗ/субфедов)
         by_sector: dict[str, list[str]] = {}
         for secid in out:
-            if not rows[secid].bond.is_ofz and rows[secid].sector not in ("gov", "subfed"):
-                by_sector.setdefault(rows[secid].sector or "other", []).append(secid)
+            # «other» — неклассифицированные, это не один сектор; лимит к ним не применяем
+            if not rows[secid].bond.is_ofz and rows[secid].sector not in ("gov", "subfed", "other", ""):
+                by_sector.setdefault(rows[secid].sector, []).append(secid)
         for sector, ids in by_sector.items():
             tot = sum(out[i] for i in ids)
             if tot > L.max_sector_share + 1e-9:

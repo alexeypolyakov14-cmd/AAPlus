@@ -93,6 +93,7 @@ class ValueHYStrategy(Strategy):
         fin: dict[str, float] = {}
         ret: dict[str, float] = {}
         news: dict[str, float] = {}
+        news_known: dict[str, float] = {}
         stops: dict[str, str] = {}
         for r in corp:
             why = self.stop_reason(r)
@@ -110,7 +111,11 @@ class ValueHYStrategy(Strategy):
             ret[r.secid] = m.yield_worst - pd_of(rating) * self.lgd - liq_cost
             ns = getattr(r, "news", None)
             news[r.secid] = ns.score if ns is not None else 0.0
-        zs, zf, zr, zn = _z(spread), _z(fin), _z(ret), _z(news)
+            if ns is not None and ns.n:
+                news_known[r.secid] = ns.score
+        # z-оценка новостей только среди эмитентов с новостями: без новостей — 0, а не «лучше среднего»
+        zs, zf, zr, zn_known = _z(spread), _z(fin), _z(ret), _z(news_known)
+        zn = {s: zn_known.get(s, 0.0) for s in spread}
         out: dict[str, dict[str, float]] = {}
         for s in spread:
             comp = self.w_spread * zs[s] + self.w_fin * zf[s] + self.w_ret * zr[s] + self.w_news * zn[s]
