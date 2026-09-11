@@ -61,6 +61,11 @@ jobs:
       - name: Разведка сайтов рейтинговых агентств (формы, пагинация, ajax)
         continue-on-error: true
         run: bondtrader ratings discover --deep
+      - name: Разведка ГИР БО и e-disclosure (отчётность эмитентов)
+        continue-on-error: true
+        run: |
+          bondtrader financials discover --query "Балтийский лизинг"
+          bondtrader financials discover --query "7826705374"
       - name: Книга рейтингов из предыдущих прогонов (кэш)
         uses: actions/cache@v4
         with:

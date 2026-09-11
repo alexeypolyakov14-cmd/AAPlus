@@ -413,6 +413,14 @@ def cmd_ratings(args, settings):
         return
 
 
+def cmd_financials(args, settings):
+    if args.action == "discover":
+        from .data.financials import discover
+        discover(args.query or "Балтийский лизинг")
+        return
+    raise SystemExit("пока доступно только: financials discover")
+
+
 def cmd_strategies(args, settings):
     for name, cls in STRATEGIES.items():
         doc = (cls.__doc__ or "").strip().splitlines()[0]
@@ -453,6 +461,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("keyrate", parents=[common], help="ключевая ставка ЦБ и фаза цикла"); sp.set_defaults(fn=cmd_keyrate)
     sp = sub.add_parser("bond", parents=[common], help="карточка облигации"); sp.add_argument("secid"); sp.add_argument("--schedule", action="store_true"); sp.set_defaults(fn=cmd_bond)
     sp = sub.add_parser("strategies", parents=[common], help="список стратегий"); sp.set_defaults(fn=cmd_strategies)
+    sp = sub.add_parser("financials", parents=[common], help="отчётность эмитентов: discover")
+    sp.add_argument("action", choices=["discover"]); sp.add_argument("--query", help="название эмитента для разведки"); sp.set_defaults(fn=cmd_financials)
     sp = sub.add_parser("ratings", parents=[common], help="кредитные рейтинги: list | show SECID | coverage | discover")
     sp.add_argument("action", choices=["list", "show", "coverage", "discover", "fetch"]); sp.add_argument("secid", nargs="?")
     sp.add_argument("--names", nargs="*", help="для discover: какие источники смотреть (для --deep: список URL)")
