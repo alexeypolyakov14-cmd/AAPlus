@@ -78,6 +78,12 @@ bondtrader portfolio --broker tinvest
 bondtrader peers --top 30                          # за что платят больше, чем за пиров (рейтинг ± сектор ± дюрация)
 bondtrader peers "БалтЛиз"                          # группа пиров конкретной бумаги: кто похож и на сколько она дороже
 bondtrader signals -s gspread -p rank=peers -p min_excess_bp=100 -p top_n=20   # отбор по превышению над пирами
+bondtrader history --top 40 --bottom 10            # спред против своей истории: расширение/сжатие за 30/60 дн., z, первичка
+bondtrader history "БалтЛиз"                        # ряд спредов одной бумаги + запаздывание рейтинга
+bondtrader issuer                                  # эмитенты, у которых один выпуск платит больше остальных (кривая эмитента)
+bondtrader issuer "ТГК-14"                          # все выпуски эмитента: спред, ориентир по кривой эмитента, отклонение
+bondtrader signals -s gspread -p rank=history -p min_excess_bp=150   # отбор по расширению спреда за 30 дн.
+bondtrader signals -s gspread -p rank=issuer -p min_excess_bp=100    # отбор по превышению над кривой эмитента
 bondtrader why "НЛМК"                              # все выпуски эмитента и почему (не) в скрине
 bondtrader report --broker tinvest --telegram      # отчёт в чат: HTML-таблицы позиций/P&L, алерты, цель, новости + кнопки
 bondtrader bot --menu                              # прислать справку с кнопками и ответить на накопившиеся запросы
@@ -159,8 +165,8 @@ bond-trading/
 │   ├── report_tg.py         # секции отчёта для Telegram (HTML, <pre>-таблицы)
 │   ├── notify.py            # Telegram Bot API: sendMessage, getUpdates, клавиатуры
 │   ├── bot.py               # кнопки/команды бота: отчёт, позиции, новости, скрин, алерты
-│   ├── analytics/           # bond_math.py, curve.py, fair_spread.py, peers.py (группа пиров)
-│   ├── data/                # moex.py, cbr.py, cache.py, tls.py, ratings.py, ratings_web.py, financials.py, girbo.py, disclosure.py, news.py, sectors.py
+│   ├── analytics/           # bond_math.py, curve.py, fair_spread.py, peers.py (пиры), history.py (спред vs своя история), issuer_curve.py (кривая эмитента)
+│   ├── data/                # moex.py, cbr.py, cache.py, tls.py, ratings.py, ratings_web.py, financials.py, girbo.py, disclosure.py, news.py, sectors.py, history.py (история спредов + книга кривых)
 │   ├── strategies/          # base.py, ladder.py, spread.py, rate_cycle.py, carry.py, value_hy.py, gspread.py
 │   ├── backtest/            # engine.py, data.py, metrics.py
 │   └── execution/           # base.py, paper.py, tinvest.py, executor.py

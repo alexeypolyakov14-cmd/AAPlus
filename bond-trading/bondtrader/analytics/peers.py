@@ -2,7 +2,8 @@
 
 Пиры = корпоративные бумаги той же ступени рейтинга (без рейтинга — своя группа), опционально того же сектора
 и близкой дюрации. Если пиров меньше min_peers, группа расширяется каскадом: убираем сектор → расширяем
-рейтинг на ±1 ступень → убираем окно дюрации → ±2 ступени → все корпораты. Так у каждой бумаги есть
+рейтинг на ±1 ступень → убираем окно дюрации → ±2 ступени → все корпораты. Для бумаг без рейтинга сектор
+учитывается всегда и первым (лизинг сравниваем с лизингом), затем все безрейтинговые. Так у каждой бумаги есть
 ориентир, а описание группы говорит, насколько он «размыт».
 
 Результат: медиана и квартили спреда пиров, превышение над медианой (excess, б.п.), место бумаги среди пиров
@@ -65,9 +66,14 @@ def peer_group(r, universe: list, *, min_peers: int = 5, same_sector: bool = Fal
         return out
 
     # каскад расширения: от точной группы к самой широкой
-    steps = [(0, same_sector, dur_window), (0, False, dur_window), (1, False, dur_window), (1, False, None)]
-    if max_notch >= 2:
-        steps.append((2, False, None))
+    if g is None:
+        # без рейтинга «ступени» нет, и корзина безрейтинговых разношёрстна (суборды Сбера рядом с ВДО 3-го уровня):
+        # сравниваем сначала внутри сектора, потом по всем безрейтинговым той же дюрации, потом без окна
+        steps = [(0, True, dur_window), (0, False, dur_window), (0, True, None), (0, False, None)]
+    else:
+        steps = [(0, same_sector, dur_window), (0, False, dur_window), (1, False, dur_window), (1, False, None)]
+        if max_notch >= 2:
+            steps.append((2, False, None))
     for i, (notch, sector, window) in enumerate(steps):
         peers = select(notch, sector, window)
         if len(peers) >= min_peers:
@@ -87,6 +93,8 @@ def _describe(r, notch: int, sector: bool, window: Optional[float]) -> str:
     parts = [rating]
     if sector:
         parts.append(f"сектор {r.sector or 'other'}")
+    elif g is None:
+        parts.append("все сектора")
     if window is not None:
         d = r.metrics.macaulay_duration
         parts.append(f"дюрация {max(0.0, d - window):.1f}–{d + window:.1f}")

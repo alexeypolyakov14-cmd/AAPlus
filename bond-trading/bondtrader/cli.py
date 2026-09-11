@@ -100,6 +100,49 @@ def _header(snap: MarketSnapshot) -> None:
           f"Рейтинги: {rt}  Отчётность: {fin}  e-disclosure: {ev}  Новости: {nw}\n")
 
 
+def _analytics(snap: MarketSnapshot, rows: list[ScreenRow], only: Optional[set] = None) -> tuple[dict, dict]:
+    """История спреда (SpreadStats) и кривая эмитента (IssuerCurveStats) по корпоративным бумагам среза.
+
+    История тянется с MOEX лениво и только если снимок живой (в фикстурах — пусто); кривая эмитента считается
+    по срезу без сети. only — ограничить историю набором secid (для точечных команд)."""
+    from .analytics.issuer_curve import issuer_curves
+    corp = [r for r in rows if not r.bond.is_ofz and not r.bond.is_floater and r.metrics.g_spread is not None]
+    iss = issuer_curves(corp)
+    hist: dict = {}
+    if snap.history is not None:
+        todo = [r for r in corp if only is None or r.secid in only]
+        for r in todo:
+            st = snap.history.stats(r.bond, r.quote, r.metrics.g_spread)
+            if st is not None:
+                hist[r.secid] = st
+        snap.history.save()
+        msg = f"История спредов: {len(hist)} из {len(todo)} бумаг за {snap.history.days} дн."
+        if snap.history.failures:
+            msg += f", ошибок загрузки {snap.history.failures}"
+        print(msg, file=sys.stderr)
+    return hist, iss
+
+
+def _make_ctx(snap: MarketSnapshot, rows: list[ScreenRow], pf: Portfolio) -> MarketContext:
+    """MarketContext с аналитикой: история спреда, кривая эмитента и ряды спредов для стратегий."""
+    hist, iss = _analytics(snap, rows)
+    series: dict[str, list[float]] = {}
+    if snap.history is not None:
+        by_id = {r.secid: r for r in rows}
+        series = {s: [v for _, v in snap.history.series(by_id[s].bond)] for s in hist}
+    return MarketContext(snap.settle, rows, snap.curve, snap.keyrate, pf, series, hist, iss)
+
+
+def _rating_lag(snap: MarketSnapshot, bond, hs) -> str:
+    """«Запаздывание рейтинга»: агентство повысило ступень за 180 дней, а спред за 60 дней не сжался."""
+    ch = _rating_change(snap, bond)
+    if not ch:
+        return ""
+    if ch.startswith("↑") and hs is not None and hs.chg60 is not None and hs.chg60 > -50:
+        return f"рейтинг {ch}, спред не сжался ({hs.chg60:+.0f} б.п. за 60 дн.)"
+    return f"рейтинг {ch}"
+
+
 # ---------------------------------------------------------------------------
 # Команды
 # ---------------------------------------------------------------------------
@@ -256,7 +299,7 @@ def cmd_signals(args, settings):
     _header(snap)
     name, params = _strategy_spec(args, settings)
     st = make_strategy(name, params)
-    ctx = MarketContext(snap.settle, rows, snap.curve, snap.keyrate, pf)
+    ctx = _make_ctx(snap, rows, pf)
     by_id = ctx.by_id
     targets = st.targets(ctx)
     risk = RiskManager(RiskLimits.from_dict(settings.get("risk", default={})))
@@ -289,7 +332,7 @@ def cmd_trade(args, settings):
     _header(snap)
     name, params = _strategy_spec(args, settings)
     st = make_strategy(name, params)
-    ctx = MarketContext(snap.settle, rows, snap.curve, snap.keyrate, pf)
+    ctx = _make_ctx(snap, rows, pf)
     by_id = ctx.by_id
     risk = RiskManager(RiskLimits.from_dict(settings.get("risk", default={})))
     targets, notes = risk.enforce_targets(st.targets(ctx), by_id)
@@ -427,7 +470,7 @@ def collect_report(args, settings) -> dict:
     snap, rows, pf, broker = _build_context(args, settings)
     name, params = _strategy_spec(args, settings)
     st = make_strategy(name, params)
-    ctx = MarketContext(snap.settle, rows, snap.curve, snap.keyrate, pf)
+    ctx = _make_ctx(snap, rows, pf)
     by_id = ctx.by_id
     targets, notes = RiskManager(RiskLimits.from_dict(settings.get("risk", default={}))).enforce_targets(st.targets(ctx), by_id)
     reasons = st.explain(ctx)
@@ -1031,6 +1074,7 @@ def cmd_spreads(args, settings):
     print(pd.DataFrame(recs).to_string(index=False))
     # --- остатки: за что платят больше внутри группы пиров (ступень рейтинга, при нехватке — расширяется) ---
     from .analytics.peers import peer_stats
+    hist, iss = _analytics(snap, rows)
     out = []
     for r in corp:
         if args.rating and (r.rating.rating if r.rating else "—") != args.rating.upper():
@@ -1041,9 +1085,17 @@ def cmd_spreads(args, settings):
         why = []
         if r.news is not None and r.news.n:
             why.append(f"новости {r.news.score:+.1f}" + (f" ({r.news.worst.tags.split(',')[0]})" if r.news.worst else ""))
-        ch = _rating_change(snap, r.bond)
-        if ch:
-            why.append("рейтинг " + ch)
+        hs, ist = hist.get(r.secid), iss.get(r.secid)
+        lag = _rating_lag(snap, r.bond, hs)
+        if lag:
+            why.append(lag)
+        if hs is not None:
+            if hs.fresh:
+                why.append(f"первичка (первая сделка {hs.first})")
+            elif hs.chg30 is not None and abs(hs.chg30) >= 100:
+                why.append(f"спред {hs.chg30:+.0f} б.п. за 30 дн. (z={hs.z:+.1f})")
+        if ist is not None and abs(ist.resid) >= 100:
+            why.append(f"{ist.resid:+.0f} б.п. к кривой эмитента (n={ist.n_other})")
         if r.fin is not None:
             why.append(f"отчётность {r.fin.score:.0f}" + (": " + "; ".join(r.fin.flags[:2]) if r.fin.flags else ""))
         if r.stop_events:
@@ -1058,7 +1110,9 @@ def cmd_spreads(args, settings):
             why.append(f"оборот {r.quote.turnover / 1e6:.1f} млн")
         out.append({"secid": r.secid, "name": r.bond.name, "rating": g, "dur": round(r.metrics.macaulay_duration, 1),
                     "ytw": round(r.metrics.yield_worst, 1), "spread": round(r.metrics.g_spread), "vs_peers": round(r.metrics.g_spread - med),
-                    "vs_model": None if resid_model != resid_model else round(resid_model), "sector": r.sector, "why": "; ".join(why) or "—"})
+                    "vs_model": None if resid_model != resid_model else round(resid_model),
+                    "chg30": None if hs is None or hs.chg30 is None else round(hs.chg30),
+                    "vs_issuer": None if ist is None else round(ist.resid), "sector": r.sector, "why": "; ".join(why) or "—"})
     df = pd.DataFrame(out)
     if df.empty:
         print("\n(нет корпоративных бумаг)")
@@ -1084,12 +1138,16 @@ def cmd_peers(args, settings):
         hits = [r for r in corp if any(q in f"{r.bond.name} {r.bond.full_name}".upper() or r.secid.upper() == q or (r.bond.isin or "").upper() == q for q in qs)]
         if not hits:
             raise SystemExit(f"«{args.query}»: нет в скрине (см. bondtrader why)")
+        hist, iss = _analytics(snap, rows, only={r.secid for r in hits})
         for r in hits:
             ps = peer_stats(r, corp, **kw)
             print(f"\n{r.secid} {r.bond.name}: рейтинг {r.rating_str}, сектор {r.sector or 'other'}, дюрация {r.metrics.macaulay_duration:.1f}, "
                   f"YTW {r.metrics.yield_worst:.1f}%, G-спред {r.metrics.g_spread:.0f} б.п.")
             print(f"Пиры: {ps.group}, n={ps.n}, медиана {ps.median:.0f} (кварт. {ps.p25:.0f}–{ps.p75:.0f}); "
                   f"превышение {ps.excess:+.0f} б.п., дороже {ps.pct_rank:.0%} похожих" + (f", группа расширена ({ps.widened})" if ps.widened else ""))
+            hs, ist = hist.get(r.secid), iss.get(r.secid)
+            print("История: " + (hs.describe() if hs is not None else "нет данных"))
+            print("Эмитент: " + (ist.describe() if ist is not None else "других выпусков в срезе нет"))
             recs = [{"secid": x.secid, "name": x.bond.name, "rating": x.rating_str, "sector": x.sector, "dur": round(x.metrics.macaulay_duration, 1),
                      "ytw": round(x.metrics.yield_worst, 1), "spread": round(x.metrics.g_spread), "turnover_mln": round(x.quote.turnover / 1e6, 1),
                      "news": (f"{x.news.score:+.1f}" if x.news is not None and x.news.n else "")}
@@ -1097,19 +1155,155 @@ def cmd_peers(args, settings):
             print(pd.DataFrame(recs).to_string(index=False))
         return
     table = peer_table(corp, **kw)
+    hist, iss = _analytics(snap, rows)
     by_id = {r.secid: r for r in corp}
     recs = []
     for s, ps in table.items():
         r = by_id[s]
+        hs, ist = hist.get(s), iss.get(s)
         recs.append({"secid": s, "name": r.bond.name, "rating": r.rating_str, "sector": r.sector, "dur": round(r.metrics.macaulay_duration, 1),
                      "ytw": round(r.metrics.yield_worst, 1), "spread": round(r.metrics.g_spread), "peers_med": round(ps.median), "excess": round(ps.excess),
                      "pct_rank": round(ps.pct_rank, 2), "n": ps.n, "group": ps.group,
+                     "chg30": None if hs is None or hs.chg30 is None else round(hs.chg30), "z": None if hs is None else round(hs.z, 1),
+                     "hist": hs.regime if hs is not None else "н/д", "vs_issuer": None if ist is None else round(ist.resid),
                      "news": (f"{r.news.score:+.1f}" if r.news is not None and r.news.n else "")})
     df = pd.DataFrame(recs).sort_values("excess", ascending=False)
     if args.min_excess:
         df = df[df["excess"] >= args.min_excess]
     print(f"\nЗа что платят больше, чем за пиров (рейтинг{' + сектор' if args.sector else ''}{f', дюрация ±{args.dur_window:g}' if args.dur_window > 0 else ''}; "
-          f"мин. пиров {args.min_peers}); excess — к медиане пиров, pct_rank — доля пиров дешевле:")
+          f"мин. пиров {args.min_peers}; без рейтинга — сначала свой сектор); excess — к медиане пиров, pct_rank — доля пиров дешевле, "
+          f"chg30/z/hist — спред против своей истории, vs_issuer — к кривой эмитента:")
+    _print_df(df.head(args.top), csv=args.csv)
+
+
+def _find_rows(rows: list[ScreenRow], query: str) -> list[ScreenRow]:
+    qs = [x.strip().upper() for x in query.replace("|", ",").split(",") if x.strip()]
+    return [r for r in rows if any(q in f"{r.bond.name} {r.bond.full_name}".upper() or r.secid.upper() == q or (r.bond.isin or "").upper() == q for q in qs)]
+
+
+def cmd_history(args, settings):
+    """Спред против собственной истории: расширение/сжатие за 30–60 дней, z-оценка, первичка, запаздывание рейтинга."""
+    snap = load_snapshot(settings, args.fixtures)
+    if snap.history is not None and args.days:
+        snap.history.days = args.days
+    rows = _screen(snap, settings, args)
+    _header(snap)
+    if snap.history is None:
+        print("История спредов недоступна: офлайн-режим (фикстуры) или data.history_days = 0.")
+        return
+    corp = [r for r in rows if not r.bond.is_ofz and not r.bond.is_floater and r.metrics.g_spread is not None]
+    if args.query:
+        hits = _find_rows(corp, args.query)
+        if not hits:
+            raise SystemExit(f"«{args.query}»: нет в скрине (см. bondtrader why)")
+        hist, iss = _analytics(snap, rows, only={r.secid for r in hits})
+        for r in hits:
+            hs = hist.get(r.secid)
+            print(f"\n{r.secid} {r.bond.name}: рейтинг {r.rating_str}, дюрация {r.metrics.macaulay_duration:.1f}, YTW {r.metrics.yield_worst:.1f}%, "
+                  f"G-спред {r.metrics.g_spread:.0f} б.п. (наш расчёт)")
+            if hs is None:
+                pts = snap.history.series(r.bond)
+                print(f"История: недостаточно наблюдений ({len(pts)} за {snap.history.days} дн.)")
+                continue
+            print(f"История ({hs.regime}): {hs.describe()}")
+            lag = _rating_lag(snap, r.bond, hs)
+            if lag:
+                print("Рейтинг: " + lag)
+            ist = iss.get(r.secid)
+            if ist is not None:
+                print("Эмитент: " + ist.describe())
+            pts = snap.history.series(r.bond)
+            step = max(1, len(pts) // args.points)
+            sample = pts[::-1][::step][::-1] if len(pts) > args.points else pts
+            print(pd.DataFrame([{"date": d, "spread": round(v)} for d, v in sample]).to_string(index=False))
+        return
+    hist, iss = _analytics(snap, rows)
+    recs = []
+    for r in corp:
+        hs = hist.get(r.secid)
+        if hs is None:
+            continue
+        why = []
+        lag = _rating_lag(snap, r.bond, hs)
+        if lag:
+            why.append(lag)
+        if r.news is not None and r.news.n and r.news.negative:
+            why.append(f"новости {r.news.score:+.1f}")
+        ist = iss.get(r.secid)
+        if ist is not None and abs(ist.resid) >= 100:
+            why.append(f"{ist.resid:+.0f} к кривой эмитента")
+        recs.append({"secid": r.secid, "name": r.bond.name, "rating": r.rating_str, "dur": round(r.metrics.macaulay_duration, 1),
+                     "spread": round(r.metrics.g_spread), "hist_now": round(hs.now), "med": round(hs.median), "z": round(hs.z, 1),
+                     "chg30": None if hs.chg30 is None else round(hs.chg30), "chg60": None if hs.chg60 is None else round(hs.chg60),
+                     "lo": round(hs.lo), "hi": round(hs.hi), "n": hs.n, "first": hs.first, "regime": hs.regime, "why": "; ".join(why) or "—"})
+    if not recs:
+        print("Ни по одной бумаге среза не набралось истории.")
+        return
+    df = pd.DataFrame(recs)
+    regimes = df["regime"].value_counts().to_dict()
+    print(f"Бумаг с историей: {len(df)} из {len(corp)}; режимы: " + ", ".join(f"{k} {v}" for k, v in regimes.items()))
+    key = {"chg30": "chg30", "z": "z", "chg60": "chg60"}[args.sort]
+    df = df.sort_values(key, ascending=False, na_position="last")
+    if args.regime:
+        df = df[df["regime"] == args.regime]
+    print(f"\nСпред против собственной истории за {snap.history.days} дн. (hist_now/med/lo/hi — в методике MOEX YIELD, spread — наш расчёт; "
+          f"chg30/chg60 — изменение к уровню 30/60 дней назад; сортировка по {key}):")
+    _print_df(df.head(args.top), csv=args.csv)
+    if args.bottom:
+        print(f"\nСильнее всего сжались (топ {args.bottom}):")
+        print(df.dropna(subset=[key]).tail(args.bottom).iloc[::-1].to_string(index=False))
+
+
+def cmd_issuer(args, settings):
+    """Кривая эмитента: платит ли выпуск больше остальных выпусков того же эмитента (неэффективность бумаги vs оценка эмитента)."""
+    from .analytics.issuer_curve import issuer_curves
+    snap = load_snapshot(settings, args.fixtures)
+    rows = _screen(snap, settings, args)
+    _header(snap)
+    corp = [r for r in rows if not r.bond.is_ofz and not r.bond.is_floater and r.metrics.g_spread is not None]
+    iss = issuer_curves(corp)
+    by_issuer: dict[str, list[ScreenRow]] = {}
+    for r in corp:
+        by_issuer.setdefault(r.bond.issuer_key, []).append(r)
+    if args.query:
+        hits = _find_rows(corp, args.query)
+        if not hits:
+            raise SystemExit(f"«{args.query}»: нет в скрине (см. bondtrader why)")
+        keys = sorted({r.bond.issuer_key for r in hits})
+        hist, _ = _analytics(snap, rows, only={x.secid for k in keys for x in by_issuer[k]})
+        for k in keys:
+            issues = sorted(by_issuer[k], key=lambda x: x.metrics.macaulay_duration)
+            sp = [x.metrics.g_spread for x in issues]
+            print(f"\n{k}: выпусков в срезе {len(issues)}, спреды {min(sp):.0f}–{max(sp):.0f} б.п., медиана {sorted(sp)[len(sp) // 2]:.0f}; "
+                  f"рейтинг {issues[0].rating_str}")
+            if len(issues) == 1:
+                print("Один выпуск — кривой эмитента нет; сравнивать можно только с пирами (bondtrader peers).")
+            recs = []
+            for x in issues:
+                st, hs = iss.get(x.secid), hist.get(x.secid)
+                recs.append({"secid": x.secid, "name": x.bond.name, "dur": round(x.metrics.macaulay_duration, 1), "ytw": round(x.metrics.yield_worst, 1),
+                             "spread": round(x.metrics.g_spread), "ref": None if st is None else round(st.ref), "vs_issuer": None if st is None else round(st.resid),
+                             "method": "" if st is None else st.method, "chg30": None if hs is None or hs.chg30 is None else round(hs.chg30),
+                             "turnover_mln": round(x.quote.turnover / 1e6, 1), "offer": x.bond.offer_date if x.bond.has_offer else None,
+                             "flags": ",".join(f for f in x.flags if f in ("оферта", "амортизация") or f.startswith("расхождение"))})
+            print(pd.DataFrame(recs).to_string(index=False))
+        return
+    recs = []
+    for k, issues in by_issuer.items():
+        if len(issues) < 2:
+            continue
+        sp = sorted(x.metrics.g_spread for x in issues)
+        worst = max(issues, key=lambda x: iss[x.secid].resid if x.secid in iss else float("-inf"))
+        st = iss.get(worst.secid)
+        recs.append({"issuer": k, "n": len(issues), "rating": issues[0].rating_str, "med": round(sp[len(sp) // 2]), "lo": round(sp[0]), "hi": round(sp[-1]),
+                     "range": round(sp[-1] - sp[0]), "widest": worst.bond.name, "vs_issuer": None if st is None else round(st.resid),
+                     "dur": round(worst.metrics.macaulay_duration, 1)})
+    if not recs:
+        print("В срезе нет эмитентов с двумя и более выпусками.")
+        return
+    df = pd.DataFrame(recs).sort_values("vs_issuer", ascending=False, na_position="last")
+    print(f"Эмитентов с ≥2 выпусками: {len(df)}. Кривая эмитента: widest — выпуск, который платит больше всех остальных выпусков эмитента, "
+          f"vs_issuer — на сколько (б.п.); range — разброс спредов внутри эмитента (широкий разброс = где-то неэффективность или особенность выпуска):")
     _print_df(df.head(args.top), csv=args.csv)
 
 
@@ -1205,6 +1399,16 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--min-peers", type=int, default=5); sp.add_argument("--sector", action="store_true", help="пиры только из того же сектора")
     sp.add_argument("--dur-window", type=float, default=1.0, help="окно дюрации ± лет (0 — не ограничивать)"); sp.add_argument("--csv")
     sp.set_defaults(fn=cmd_peers)
+    sp = sub.add_parser("history", parents=[common], help="спред против собственной истории: расширение/сжатие за 30–60 дн., z, первичка, запаздывание рейтинга"); screen_opts(sp)
+    sp.add_argument("query", nargs="?", help="бумага (часть названия/SECID/ISIN; несколько через запятую) — ряд по ней; без аргумента — таблица по срезу")
+    sp.add_argument("--days", type=int, default=0, help="окно истории, дн. (по умолчанию data.history_days)"); sp.add_argument("--top", type=int, default=40)
+    sp.add_argument("--bottom", type=int, default=0, help="показать и сильнее всего сжавшиеся"); sp.add_argument("--sort", choices=["chg30", "z", "chg60"], default="chg30")
+    sp.add_argument("--regime", choices=["расширение", "сжатие", "стабильно", "первичка"], help="только бумаги в этом режиме")
+    sp.add_argument("--points", type=int, default=20, help="сколько точек ряда печатать для одной бумаги"); sp.add_argument("--csv")
+    sp.set_defaults(fn=cmd_history)
+    sp = sub.add_parser("issuer", parents=[common], help="кривая эмитента: платит ли выпуск больше других выпусков того же эмитента"); screen_opts(sp)
+    sp.add_argument("query", nargs="?", help="эмитент/бумага (часть названия/SECID/ISIN) — все его выпуски; без аргумента — эмитенты с самым выбивающимся выпуском")
+    sp.add_argument("--top", type=int, default=30); sp.add_argument("--csv"); sp.set_defaults(fn=cmd_issuer)
     sp = sub.add_parser("why", parents=[common], help="выпуски эмитента: прошли ли сито, почему нет, проходят ли риск-лимиты и стратегию"); screen_opts(sp); strat_opts(sp)
     sp.add_argument("query", help="часть названия (НЛМК), SECID или ISIN; несколько вариантов через запятую"); sp.set_defaults(fn=cmd_why)
     sp = sub.add_parser("notify", parents=[common], help="отправить текст/файл в Telegram"); sp.add_argument("--file"); sp.add_argument("--text")

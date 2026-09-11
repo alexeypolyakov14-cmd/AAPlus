@@ -36,6 +36,8 @@ class MarketContext:
     keyrate: Optional[KeyRateView] = None
     portfolio: Portfolio = field(default_factory=Portfolio)
     spread_history: dict[str, list[float]] = field(default_factory=dict)  # secid -> история G-спредов, б.п.
+    history_stats: dict = field(default_factory=dict)   # secid -> analytics.history.SpreadStats (спред против своей истории)
+    issuer_stats: dict = field(default_factory=dict)    # secid -> analytics.issuer_curve.IssuerCurveStats (кривая эмитента)
 
     @property
     def by_id(self) -> dict[str, ScreenRow]:

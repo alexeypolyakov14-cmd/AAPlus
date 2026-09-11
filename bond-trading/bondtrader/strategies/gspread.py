@@ -1,15 +1,23 @@
 """gspread: ранжирование по спреду к кривой ОФЗ (G-curve) без моделей.
 
-rank = "spread" — сырой G-спред: кому рынок доверяет меньше всего.
-rank = "peers"  — превышение над медианой своей ступени рейтинга (без рейтинга — своя группа): за что платят больше,
-                  чем за соседей по рейтингу; min_excess_bp отсекает тех, кто платит не больше соседей.
-rank = "model"  — остаток к регрессии справедливого спреда (рейтинг, дюрация, оборот, листинг).
+rank = "spread"  — сырой G-спред: кому рынок доверяет меньше всего.
+rank = "peers"   — превышение над медианой своей ступени рейтинга (без рейтинга — свой сектор): за что платят больше,
+                   чем за соседей по рейтингу; min_excess_bp отсекает тех, кто платит не больше соседей.
+rank = "model"   — остаток к регрессии справедливого спреда (рейтинг, дюрация, оборот, листинг).
+rank = "history" — расширение спреда за 30 дней против собственной истории бумаги (ctx.history_stats): «что-то
+                   случилось», а не «всегда так торговалась»; бумаги без истории не участвуют.
+rank = "issuer"  — превышение над кривой самого эмитента (ctx.issuer_stats): один выпуск шире соседей по эмитенту;
+                   эмитенты с одним выпуском не участвуют.
 После сита ликвидности и стоп-факторов берём top_n, не больше per_issuer выпусков одного эмитента,
 потолок дюрации max_duration. Веса равные, плюс ликвидное ядро в ОФЗ ofz_min_share.
+Обоснование каждой бумаги всегда содержит все доступные ракурсы (пиры, история, кривая эмитента), какой бы
+rank ни был выбран — чтобы списки разных методик можно было сравнивать по одной строке.
 """
 from __future__ import annotations
 
 from .base import MarketContext, Strategy
+
+RANKS = ("spread", "peers", "model", "history", "issuer")
 
 
 class GSpreadStrategy(Strategy):
@@ -19,32 +27,39 @@ class GSpreadStrategy(Strategy):
     def __init__(self, top_n: int = 10, per_issuer: int = 1, max_duration: float = 3.0, min_spread_bp: float = 0.0,
                  ofz_min_share: float = 0.0, rank: str = "spread", min_excess_bp: float = 0.0, min_peers: int = 5,
                  same_sector: bool = False, dur_window: float = 1.0):
+        if rank not in RANKS:
+            raise ValueError(f"rank={rank}: допустимо {', '.join(RANKS)}")
         self.top_n, self.per_issuer, self.max_duration = top_n, per_issuer, max_duration
         self.min_spread_bp, self.ofz_min_share = min_spread_bp, ofz_min_share
         self.rank, self.min_excess_bp, self.min_peers = rank, min_excess_bp, min_peers
         self.same_sector, self.dur_window = same_sector, (dur_window if dur_window and dur_window > 0 else None)
         self._reasons: dict[str, str] = {}
-        self.excess: dict[str, float] = {}     # секид -> превышение над соседями/моделью (б.п.)
-        self.peers: dict = {}                  # секид -> PeerStats (rank=peers)
+        self.excess: dict[str, float] = {}     # секид -> превышение над ориентиром выбранной методики (б.п.)
+        self.peers: dict = {}                  # секид -> PeerStats (считается всегда — для обоснования)
 
-    def _excess(self, universe: list) -> dict[str, float]:
-        """Превышение спреда над ориентиром: медиана ступени (peers) или регрессия (model). Для spread — сам спред."""
+    def _excess(self, universe: list, ctx: MarketContext) -> dict[str, float]:
+        """Превышение спреда над ориентиром выбранной методики; бумаги без ориентира в словарь не попадают."""
+        from ..analytics.peers import peer_table
+        self.peers = peer_table(universe, min_peers=self.min_peers, same_sector=self.same_sector, dur_window=self.dur_window)
         if self.rank == "model":
             from ..analytics.fair_spread import features_of, fit_fair_spread
             model = fit_fair_spread(universe)
             return {r.secid: (model.residual(features_of(r), r.metrics.g_spread) if model.ok else r.metrics.g_spread) for r in universe}
         if self.rank == "peers":
-            from ..analytics.peers import peer_table
-            self.peers = peer_table(universe, min_peers=self.min_peers, same_sector=self.same_sector, dur_window=self.dur_window)
             return {s: ps.excess for s, ps in self.peers.items()}
+        if self.rank == "history":
+            return {r.secid: ctx.history_stats[r.secid].chg30 for r in universe
+                    if r.secid in ctx.history_stats and ctx.history_stats[r.secid].chg30 is not None}
+        if self.rank == "issuer":
+            return {r.secid: ctx.issuer_stats[r.secid].resid for r in universe if r.secid in ctx.issuer_stats}
         return {r.secid: r.metrics.g_spread for r in universe}
 
     def ranked(self, ctx: MarketContext) -> list:
         # ориентир (медиана ступени / модель) считается по всему корпоративному срезу, а не только по коротким бумагам
         universe = [r for r in ctx.rows if not r.bond.is_ofz and not r.bond.is_floater and r.metrics.g_spread is not None]
-        self.excess = self._excess(universe)
-        rows = [r for r in universe if r.metrics.macaulay_duration <= self.max_duration and r.metrics.g_spread >= self.min_spread_bp
-                and (self.rank == "spread" or self.excess[r.secid] >= self.min_excess_bp)]
+        self.excess = self._excess(universe, ctx)
+        rows = [r for r in universe if r.secid in self.excess and r.metrics.macaulay_duration <= self.max_duration
+                and r.metrics.g_spread >= self.min_spread_bp and (self.rank == "spread" or self.excess[r.secid] >= self.min_excess_bp)]
         rows.sort(key=lambda r: -self.excess[r.secid])
         picks, per = [], {}
         for r in rows:
@@ -57,6 +72,22 @@ class GSpreadStrategy(Strategy):
                 break
         return picks
 
+    def reason(self, r, ctx: MarketContext) -> str:
+        m = r.metrics
+        base = (f"G-спред {m.g_spread:+.0f} б.п. (YTW {m.yield_worst:.1f}% при ОФЗ {m.yield_worst - m.g_spread / 100:.1f}% "
+                f"на дюрации {m.macaulay_duration:.1f}), рейтинг {r.rating_str}")
+        ps = self.peers.get(r.secid)
+        if ps is not None and ps.n:
+            base += f"; пиры: {ps.excess:+.0f} б.п. к медиане {ps.median:.0f} ({ps.group}, n={ps.n}), дороже {ps.pct_rank:.0%} похожих"
+        if self.rank == "model":
+            base += f"; модель: {self.excess[r.secid]:+.0f} б.п. к справедливому"
+        hs = ctx.history_stats.get(r.secid)
+        base += f"; история: {hs.describe()}" if hs is not None else "; история: нет данных"
+        ist = ctx.issuer_stats.get(r.secid)
+        if ist is not None:
+            base += f"; эмитент: {ist.describe()}"
+        return base
+
     def targets(self, ctx: MarketContext) -> dict[str, float]:
         self._reasons = {}
         picks = self.ranked(ctx)
@@ -66,16 +97,7 @@ class GSpreadStrategy(Strategy):
         corp_share = 1.0 - (self.ofz_min_share if ofz and self.ofz_min_share > 0 else 0.0)
         for r in picks:
             w[r.secid] = corp_share / len(picks)
-            m = r.metrics
-            base = (f"G-спред {m.g_spread:+.0f} б.п. (YTW {m.yield_worst:.1f}% при ОФЗ {m.yield_worst - m.g_spread / 100:.1f}% "
-                    f"на дюрации {m.macaulay_duration:.1f}), рейтинг {r.rating_str}")
-            if self.rank == "peers":
-                ps = self.peers[r.secid]
-                base += (f"; {ps.excess:+.0f} б.п. к медиане пиров {ps.median:.0f} ({ps.group}, n={ps.n}), "
-                         f"дороже {ps.pct_rank:.0%} похожих")
-            elif self.rank == "model":
-                base += f"; {self.excess[r.secid]:+.0f} б.п. к справедливому"
-            self._reasons[r.secid] = base
+            self._reasons[r.secid] = self.reason(r, ctx)
         if ofz and self.ofz_min_share > 0:
             w[ofz[0].secid] = self.ofz_min_share if picks else 1.0
             self._reasons[ofz[0].secid] = "ликвидное ядро в ОФЗ"

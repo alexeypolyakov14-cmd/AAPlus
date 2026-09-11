@@ -14,6 +14,7 @@ from .data.cache import SqliteCache
 from .data.cbr import KeyRateView, analyze_keyrate, fetch_keyrate_history, parse_keyrate_xml
 from .data.moex import MoexClient, parse_board_securities
 from .data.disclosure import EventsBook
+from .data.history import SpreadHistoryService, ZcycStore
 from .data.financials import FinancialsBook, IssuerMap
 from .data.news import NewsBook
 from .data.ratings import RatingsBook
@@ -39,6 +40,7 @@ class MarketSnapshot:
     news: Optional[NewsBook] = None
     describe: Optional[Callable[[Bond], dict]] = None   # описание бумаги MOEX ISS (флаги дефолта)
     rejected: dict[str, str] = field(default_factory=dict)  # secid -> причина отсева последним скрином
+    history: Optional["SpreadHistoryService"] = None    # история G-спредов (MOEX history + кривые по датам); None офлайн
 
     def screen_kwargs(self) -> dict:
         return {"enrich": self.enrich, "ratings": self.ratings, "financials": self.financials,
@@ -97,9 +99,14 @@ def load_snapshot(settings: Settings, fixtures_dir: Optional[str] = None, client
         kr = analyze_keyrate(kr_hist) if kr_hist else None
     except Exception as e:  # noqa: BLE001
         log.warning("ключевая ставка ЦБ недоступна: %s", e)
+    history = None
+    days = int(settings.get("data", "history_days", default=90) or 0)
+    if days > 0:
+        store = ZcycStore(settings.get("data", "zcyc_history_json", default="data/zcyc_history.json"))
+        history = SpreadHistoryService(client, today, days=days, store=store, today_curve=curve)
     return MarketSnapshot(today, universe, curve, kr, kr_hist, enrich=client.enrich, source="moex", ratings=ratings,
                           financials=financials, issuers=issuers, events=events, news=news,
-                          describe=lambda b: client.security_description(b.secid))
+                          describe=lambda b: client.security_description(b.secid), history=history)
 
 
 def _load_fixtures(d: str) -> MarketSnapshot:

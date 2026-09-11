@@ -118,6 +118,7 @@ jobs:
             bond-trading/data/financials.csv
             bond-trading/data/issuers.csv
             bond-trading/data/disclosure.csv
+            bond-trading/data/zcyc_history.json
           key: books-${{ github.run_id }}
           restore-keys: |
             books-
@@ -154,6 +155,7 @@ jobs:
             bond-trading/data/financials.csv
             bond-trading/data/issuers.csv
             bond-trading/data/disclosure.csv
+            bond-trading/data/zcyc_history.json
           if-no-files-found: ignore
       - name: Сигналы стратегий
         run: |
@@ -217,6 +219,7 @@ jobs:
             bond-trading/data/financials.csv
             bond-trading/data/issuers.csv
             bond-trading/data/disclosure.csv
+            bond-trading/data/zcyc_history.json
           key: books-${{ github.run_id }}
           restore-keys: |
             books-
@@ -298,6 +301,7 @@ jobs:
             bond-trading/data/financials.csv
             bond-trading/data/issuers.csv
             bond-trading/data/disclosure.csv
+            bond-trading/data/zcyc_history.json
           key: books-none
           restore-keys: |
             books-
@@ -334,6 +338,7 @@ jobs:
             bond-trading/data/financials.csv
             bond-trading/data/issuers.csv
             bond-trading/data/disclosure.csv
+            bond-trading/data/zcyc_history.json
           key: books-${{ github.run_id }}
           restore-keys: |
             books-
@@ -402,6 +407,7 @@ jobs:
             bond-trading/data/financials.csv
             bond-trading/data/issuers.csv
             bond-trading/data/disclosure.csv
+            bond-trading/data/zcyc_history.json
           key: books-none
           restore-keys: |
             books-

@@ -103,3 +103,16 @@ def test_why_command(capsys):
         assert "ничего не найдено" in str(e) and "Похожие названия" in str(e) and "ВИС Ф БП04" in str(e)
     else:
         raise AssertionError("ожидался SystemExit")
+
+
+def test_history_and_issuer_commands_offline(capsys, cfg):
+    out = run(capsys, "--fixtures", FIX, "-c", cfg, "history")
+    assert "История спредов недоступна" in out
+    out = run(capsys, "--fixtures", FIX, "-c", cfg, "issuer")
+    assert "Эмитентов с ≥2 выпусками" in out or "нет эмитентов" in out
+    out = run(capsys, "--fixtures", FIX, "-c", cfg, "issuer", "Газпнф")
+    assert "выпусков в срезе" in out
+    out = run(capsys, "--fixtures", FIX, "-c", cfg, "peers", "--top", "5")
+    assert "vs_issuer" in out and "chg30" in out
+    out = run(capsys, "--fixtures", FIX, "-c", cfg, "spreads", "--top", "5")
+    assert "vs_issuer" in out

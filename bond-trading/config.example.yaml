@@ -4,6 +4,8 @@ data:
   cache_path: data/cache/http_cache.sqlite
   ratings_csv: data/ratings.csv   # книга рейтингов (см. configs/ratings.example.csv)
   ratings_conservative: true      # при нескольких агентствах брать худший рейтинг
+  history_days: 90                       # окно истории G-спредов (MOEX history + кривые ОФЗ по датам); 0 — не грузить
+  zcyc_history_json: data/zcyc_history.json   # книга кривых ОФЗ по датам (в CI едет в кэш вместе с остальными книгами)
 
 screener:
   currency: SUR

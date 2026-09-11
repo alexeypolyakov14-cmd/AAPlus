@@ -262,7 +262,7 @@ def test_gspread_peers_ranking():
     st = make_strategy("gspread", {"top_n": 2, "rank": "peers", "min_excess_bp": 0, "min_peers": 2, "per_issuer": 0, "dur_window": 0})
     w = st.targets(ctx)
     assert list(w) == ["A3", "B2"]                      # A3 (+350 к медиане A1/A2) выше B2 (+100), хотя сырой спред B2 втрое больше
-    assert "к медиане пиров 550 (A, n=2)" in st.explain(ctx)["A3"] and "дороже 100%" in st.explain(ctx)["A3"]
+    assert "пиры: +350 б.п. к медиане 550 (A, n=2)" in st.explain(ctx)["A3"] and "дороже 100%" in st.explain(ctx)["A3"]
     st2 = make_strategy("gspread", {"top_n": 5, "rank": "peers", "min_excess_bp": 150, "min_peers": 2, "per_issuer": 0, "dur_window": 0})
     assert list(st2.targets(ctx)) == ["A3"]             # только те, кто платит больше соседей хотя бы на 150 б.п.
 
@@ -288,4 +288,118 @@ def test_peer_group_widening():
     ps = peer_stats(uni[0], uni, min_peers=4, dur_window=1.0)
     assert ps.n == 4 and ps.group == "BB…B+" and ps.widened == 3          # ±1 ступень + без окна дюрации: P1, P2, Q1, F1
     ps = peer_stats(uni[6], uni, min_peers=1)
-    assert ps.n == 1 and ps.group == "без рейтинга, дюрация 0.5–2.5" and ps.excess == -50
+    assert ps.n == 1 and ps.group == "без рейтинга, сектор leasing, дюрация 0.5–2.5" and ps.excess == -50   # U1 vs U2: свой сектор
+
+
+def _row(secid, spread, rating, dur=1.5, sector="leasing", issuer=None, ytm_moex=None, dur_moex=None):
+    from datetime import date
+    from bondtrader.data.ratings import Rating
+    from bondtrader.models import Bond, BondMetrics, Quote
+    from bondtrader.screener import ScreenRow
+    b = Bond(secid, name=secid, full_name=f"{issuer or secid} 001P-01")
+    q = Quote(secid, date(2025, 6, 2), price=100.0, turnover=5e6, ytm_moex=ytm_moex, duration_moex=dur_moex)
+    m = BondMetrics(secid, 100.0, 1000.0, 20.0, None, 20.0, dur, dur * 0.9, 0, 0.1, 1.5, 15, spread)
+    return ScreenRow(b, q, m, rating=Rating("x", "y", rating) if rating else None, sector=sector)
+
+
+def test_unrated_peers_compare_within_sector_first():
+    """Безрейтинговые: сначала свой сектор (лизинг с лизингом), а не вся разношёрстная корзина без рейтинга."""
+    from bondtrader.analytics.peers import peer_stats
+    x = _row("X", 1500, None, sector="leasing")
+    uni = [x, _row("L1", 1000, None), _row("L2", 1100, None), _row("B1", 100, None, sector="bank"), _row("B2", 150, None, sector="bank"),
+           _row("R1", 900, "BB", sector="leasing")]
+    ps = peer_stats(x, uni, min_peers=2, same_sector=False, dur_window=1.0)
+    assert ps.n == 2 and ps.median == 1050 and "сектор leasing" in ps.group and "без рейтинга" in ps.group   # банки и BB не пиры
+    lonely = _row("Y", 1500, None, sector="it")
+    ps2 = peer_stats(lonely, uni + [lonely], min_peers=2, same_sector=False, dur_window=1.0)
+    assert ps2.n == 5 and "все сектора" in ps2.group and ps2.widened == 1                                   # своего сектора нет → все 5 безрейтинговых
+
+
+def test_issuer_curve_leave_one_out():
+    from bondtrader.analytics.issuer_curve import issuer_curves
+    iss = [_row("E1", 800, "BBB", dur=0.5, issuer="Эмитент"), _row("E2", 900, "BBB", dur=1.5, issuer="Эмитент"),
+           _row("E3", 1000, "BBB", dur=2.5, issuer="Эмитент"), _row("E4", 1500, "BBB", dur=1.5, issuer="Эмитент")]
+    other = [_row("O1", 700, "BBB", dur=1.0, issuer="Другой"), _row("O2", 1200, "BBB", dur=1.0, issuer="Другой")]
+    st = issuer_curves(iss + other + [_row("S1", 500, "A", issuer="Одиночка")])
+    e4 = st["E4"]
+    assert e4.method == "fit" and abs(e4.ref - 900) < 1e-6 and abs(e4.resid - 600) < 1e-6 and e4.n_other == 3   # кривая по E1–E3: 800 + 100·(dur−0.5)
+    assert st["E2"].method == "fit" and -300 < st["E2"].resid < 0                                               # кривая по E1,E3,E4 (E4 тянет её вверх): E2 ниже ориентира
+    assert st["O1"].method == "single" and st["O1"].ref == 1200 and st["O1"].resid == -500
+    assert "S1" not in st and "к ориентиру 900" in e4.describe()
+
+
+def test_spread_history_stats_and_regimes():
+    from datetime import date, timedelta
+    from bondtrader.analytics.history import spread_stats
+    settle = date(2025, 6, 2)
+    flat = [(settle - timedelta(days=i), 500 + (i % 3) * 5) for i in range(1, 80)]
+    st = spread_stats(flat, 520, settle, 90)
+    assert st.n == 79 and abs(st.median - 505) <= 5 and st.chg30 is not None and abs(st.chg30 - 15) <= 10 and st.regime == "стабильно"
+    assert spread_stats(flat[:5], 520, settle) is None                                                       # мало точек — нет статистики
+    widened = spread_stats(flat, 1200, settle, 90)
+    assert widened.z == 5.0 and widened.pct_rank == 1.0 and widened.regime == "расширение" and widened.chg60 is not None and widened.chg60 > 600
+    tight = spread_stats(flat, 200, settle, 90)
+    assert tight.regime == "сжатие" and tight.z == -5.0
+    fresh_pts = [(settle - timedelta(days=i), 900 - i * 2) for i in range(1, 15)]                              # сделки только последние 2 недели
+    fresh = spread_stats(fresh_pts, 880, settle, 90)
+    assert fresh.fresh and fresh.regime == "первичка" and fresh.chg30 is None and "первичка" in fresh.describe()
+
+
+def test_spread_history_service_uses_curve_of_the_day(tmp_path):
+    from datetime import date, timedelta
+    from bondtrader.data.history import SpreadHistoryService, ZcycStore
+    from bondtrader.analytics.curve import ZeroCurve
+    from bondtrader.models import Bond, Quote
+    settle = date(2025, 6, 2)
+
+    class FakeClient:
+        def __init__(self):
+            self.zcyc_calls = 0
+        def history(self, secid, board, start, end):
+            # доходность 25% → спред к кривой 15% = 1000 б.п.; выходной 2025-05-31 без сделки (YIELDCLOSE None)
+            return [{"date": settle - timedelta(days=i), "ytm": 25.0, "duration": 1.0, "close": 100.0} for i in range(1, 40)] \
+                + [{"date": settle - timedelta(days=2), "ytm": None, "duration": 1.0, "close": None}]
+        def zcyc(self, on):
+            self.zcyc_calls += 1
+            if on.weekday() >= 5:      # MOEX на выходной отдаёт кривую последнего торгового дня
+                on = on - timedelta(days=on.weekday() - 4)
+            return {"yearyields": {"columns": ["tradedate", "period", "value"], "data": [[on.isoformat(), 0.5, 15.0], [on.isoformat(), 2.0, 15.0]]}}
+
+    client = FakeClient()
+    store = ZcycStore(str(tmp_path / "zcyc.json"))
+    today = ZeroCurve(settle, [(0.5, 14.0), (2.0, 14.0)])
+    svc = SpreadHistoryService(client, settle, days=60, store=store, today_curve=today)
+    bond, quote = Bond("B1", name="B1", board="TQCB"), Quote("B1", settle, price=100.0, ytm_moex=26.0, duration_moex=1.0)
+    pts = svc.series(bond)
+    assert pts and all(abs(sp - 1000) < 1e-6 for _, sp in pts) and all(d.weekday() < 5 for d, _ in pts)   # выходные не в ряду: их кривая — чужая дата
+    st = svc.stats(bond, quote, fallback_spread=999.0)
+    assert st is not None and abs(st.now - 1200) < 1e-6 and abs(st.chg30 - 200) < 1e-6                # «сегодня» в методике MOEX: 26% − 14% = 1200
+    svc.save()
+    store2 = ZcycStore(str(tmp_path / "zcyc.json"))
+    assert store2.get(settle - timedelta(days=3)) is not None and store2.get(settle - timedelta(days=1)) is None   # пт 30.05 в книге, вс 01.06 — нет
+    calls = client.zcyc_calls
+    svc2 = SpreadHistoryService(client, settle, days=60, store=store2, today_curve=today)
+    svc2.series(Bond("B2", name="B2", board="TQCB"))
+    assert client.zcyc_calls == calls                                                                 # кривые взяты из книги, MOEX не спрашивали
+
+
+def test_gspread_history_and_issuer_ranks():
+    from datetime import date
+    from bondtrader.analytics.history import SpreadStats
+    from bondtrader.analytics.issuer_curve import issuer_curves
+    from bondtrader.portfolio import Portfolio
+    from bondtrader.strategies import MarketContext, make_strategy
+    rows = [_row("E1", 800, "BBB", dur=0.5, issuer="Эмитент"), _row("E2", 900, "BBB", dur=1.5, issuer="Эмитент"),
+            _row("E3", 950, "BBB", dur=2.5, issuer="Эмитент"), _row("E4", 1500, "BBB", dur=1.5, issuer="Эмитент"), _row("S1", 2000, "B", issuer="Одиночка")]
+    hs = {"S1": SpreadStats(40, date(2025, 3, 1), date(2025, 6, 1), 2000, 1900, 50, 2.0, 1800, 2000, 1.0, 50, 150, False, 90),
+          "E1": SpreadStats(40, date(2025, 3, 1), date(2025, 6, 1), 800, 500, 40, 5.0, 480, 800, 1.0, 300, 320, False, 90)}
+    ctx = MarketContext(date(2025, 6, 2), rows, None, None, Portfolio(cash=1e6), {}, hs, issuer_curves(rows))
+    st = make_strategy("gspread", {"top_n": 5, "rank": "history", "min_excess_bp": 100, "per_issuer": 0})
+    assert list(st.targets(ctx)) == ["E1"]                       # только расширение ≥100 за 30 дн.; E2–E4 без истории не участвуют
+    assert "история: спред 800 при медиане 500" in st.explain(ctx)["E1"] and "эмитент:" in st.explain(ctx)["E1"]
+    st = make_strategy("gspread", {"top_n": 5, "rank": "issuer", "min_excess_bp": 100, "per_issuer": 0})
+    assert list(st.targets(ctx)) == ["E4"]                       # S1 без второго выпуска не участвует, E4 +600 к кривой эмитента
+    assert "история: нет данных" in st.explain(ctx)["E4"]
+    import pytest
+    with pytest.raises(ValueError):
+        make_strategy("gspread", {"rank": "magic"})
