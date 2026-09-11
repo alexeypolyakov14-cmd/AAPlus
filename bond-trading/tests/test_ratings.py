@@ -123,3 +123,18 @@ def test_parse_nkr_press():
     assert [(r.subject, r.rating, r.kind) for r in rs] == [
         ("ЛОЭСК", "A", "issuer"), ("Л-Старт", "CCC", "issuer"), ("ЕвразХолдинг Финанс", "AA-", "issue"), ("ПИК-Корпорация", "A+", "issuer")]
     assert rs[0].date == date(2026, 9, 10) and all(r.agency == "НКР" for r in rs)
+
+
+def test_parse_nkr_tables_with_header():
+    from bondtrader.data.ratings_web import parse_table_with_header
+    issuers = """<table id="issuers-table"><thead><tr><th>Наименование</th><th>Рейтинг</th><th>Прогноз</th><th>ESG-рейтинг</th><th>Сектор</th><th>Дата</th></tr></thead>
+    <tbody><tr><td><a href="/ratings/issuers/Loesk/">АО «ЛОЭСК»</a></td><td data-order="5"><span>A.ru</span></td><td>Стабильный</td><td></td><td>Нефинансовые</td><td>10.09.2026</td></tr>
+    <tr><td>ООО «Отозванный»</td><td>—</td><td></td><td></td><td>Лизинг</td><td>01.01.2026</td></tr></tbody></table>"""
+    rs = parse_table_with_header(issuers, "НКР", "issuer")
+    assert len(rs) == 1 and rs[0].subject == "АО «ЛОЭСК»" and rs[0].rating == "A" and rs[0].date == date(2026, 9, 10)
+    issues = """<table id="issues-table"><thead><tr><th>Рейтингуемое лицо</th><th>Наименование эмиссии</th><th>Рейтинг</th><th>ISIN</th><th>Регистрационный номер</th><th>Дата</th></tr></thead>
+    <tbody><tr><td><a>ООО «Брусника. Строительство и девелопмент»</a></td><td><a>Биржевые зелёные облигации серии 002P-07 (RU000A10EPW2)</a></td><td data-order="7"><span>A-.ru</span></td><td>RU000A10EPW2</td><td>4B02-07</td><td>05.06.2026</td></tr></tbody></table>"""
+    rs = parse_table_with_header(issues, "НКР", "issue")
+    assert rs[0].isin == "RU000A10EPW2" and rs[0].rating == "A-" and rs[0].kind == "issue" and "Брусника" in rs[0].subject
+    book = RatingsBook(rs)
+    assert book.lookup(Bond(secid="RU000A10EPW2", name="Брус 2Р07", isin="RU000A10EPW2")).rating == "A-"

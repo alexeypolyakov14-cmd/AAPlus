@@ -353,14 +353,22 @@ def cmd_ratings(args, settings):
         discover(args.names)
         return
     if args.action == "fetch":
-        from .data.ratings_web import load_nkr
+        from .data.ratings_web import load_nkr, load_nkr_tables
         path = settings.get("data", "ratings_csv", default="data/ratings.csv")
         book = RatingsBook.from_csv(path)
         before = len(book)
-        for r in load_nkr(pages=args.pages):
-            book.add(r)
+        # актуальное состояние — таблицы эмитентов/эмиссий; пресс-релизы только по запросу
+        got = load_nkr_tables()
+        if args.press:
+            got += load_nkr(pages=args.pages)
+        seen = {(r.subject, r.agency, r.kind, r.isin, r.date) for r in book.all}
+        added = 0
+        for r in got:
+            key = (r.subject, r.agency, r.kind, r.isin, r.date)
+            if key not in seen:
+                book.add(r); seen.add(key); added += 1
         book.to_csv(path)
-        print(f"НКР: добавлено {len(book) - before} записей, всего {len(book)} -> {path}")
+        print(f"НКР: добавлено {added} записей, всего {len(book)} -> {path}")
         return
     book = RatingsBook.from_csv(settings.get("data", "ratings_csv", default="data/ratings.csv"))
     if args.action == "show":
@@ -435,7 +443,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("ratings", parents=[common], help="кредитные рейтинги: list | show SECID | coverage | discover")
     sp.add_argument("action", choices=["list", "show", "coverage", "discover", "fetch"]); sp.add_argument("secid", nargs="?")
     sp.add_argument("--names", nargs="*", help="для discover: какие источники смотреть")
-    sp.add_argument("--pages", type=int, default=3, help="для fetch: сколько страниц пресс-релизов НКР"); screen_opts(sp); sp.set_defaults(fn=cmd_ratings)
+    sp.add_argument("--pages", type=int, default=3, help="для fetch --press: сколько страниц пресс-релизов НКР")
+    sp.add_argument("--press", action="store_true", help="для fetch: дополнительно разобрать пресс-релизы НКР"); screen_opts(sp); sp.set_defaults(fn=cmd_ratings)
     sp = sub.add_parser("signals", parents=[common], help="целевой портфель и ордера по стратегии"); screen_opts(sp); strat_opts(sp)
     sp.add_argument("--broker", choices=["paper", "tinvest"]); sp.add_argument("--csv"); sp.set_defaults(fn=cmd_signals)
     sp = sub.add_parser("trade", parents=[common], help="исполнить ребалансировку через брокера"); screen_opts(sp); strat_opts(sp)
@@ -465,6 +474,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         args.fn(args, settings)
     except KeyboardInterrupt:
         return 130
+    except BrokenPipeError:  # вывод в head/less
+        try:
+            sys.stdout.close()
+        except Exception:  # noqa: BLE001
+            pass
+        return 0
     return 0
 
 

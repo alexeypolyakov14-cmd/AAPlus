@@ -23,9 +23,13 @@ log = logging.getLogger(__name__)
 CANDIDATES = {
     "acra_issuers": "https://www.acra-ratings.ru/ratings/issuers/",
     "acra_issues": "https://www.acra-ratings.ru/ratings/issues/",
-    "raexpert_all": "https://raexpert.ru/ratings/",
-    "raexpert_credits": "https://raexpert.ru/ratings/credits/",
-    "raexpert_bankcredits": "https://raexpert.ru/ratings/bankcredits/",
+    "acra_http": "http://www.acra-ratings.ru/ratings/issuers/",
+    "raexpert_credits_all": "https://raexpert.ru/ratings/credits_all/",
+    "raexpert_bankcredit_all": "https://raexpert.ru/ratings/bankcredit_all/",
+    "raexpert_debt_inst": "https://raexpert.ru/ratings/debt_inst/",
+    "raexpert_credits_fin": "https://raexpert.ru/ratings/credits_fin/",
+    "raexpert_credits_holding": "https://raexpert.ru/ratings/credits_holding/",
+    "raexpert_export": "https://raexpert.ru/all-services/rating-export",
     "nkr_press": "https://ratings.ru/ratings/",
     "nkr_issuers": "https://ratings.ru/ratings/issuers/",
     "nkr_issues": "https://ratings.ru/ratings/issues/",
@@ -35,9 +39,19 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KH
            "Accept-Language": "ru,en;q=0.8"}
 
 
-def fetch(url: str, timeout: float = 25) -> tuple[int, str, str]:
+def fetch(url: str, timeout: float = 25, insecure_fallback: bool = True) -> tuple[int, str, str]:
+    """GET с бандлом Минцифры. Для публичных справочных данных при ошибке TLS допускается повтор без проверки
+    сертификата (с предупреждением): риск подмены рейтингов ниже, чем польза от их наличия."""
     verify = ru_ca_bundle() or True
-    r = requests.get(url, headers=HEADERS, timeout=timeout, verify=verify)
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=timeout, verify=verify)
+    except requests.exceptions.SSLError as e:
+        if not insecure_fallback:
+            raise
+        log.warning("%s: TLS не проверен (%s) — повтор без проверки сертификата", url, str(e)[:120])
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        r = requests.get(url, headers=HEADERS, timeout=timeout, verify=False)
     return r.status_code, r.headers.get("Content-Type", ""), r.text
 
 
@@ -177,4 +191,75 @@ def load_nkr(pages: int = 3) -> list[Rating]:
         if not got:
             break
         out.extend(got)
+    return out
+
+
+# ---- НКР: таблицы «Эмитенты» и «Эмиссии» ----
+_ISIN_RE = re.compile(r"\b(RU000[A-Z0-9]{7})\b")
+
+
+def _header_map(text: str) -> dict[str, int]:
+    """Индексы колонок по заголовку таблицы."""
+    m = re.search(r"<thead.*?</thead>", text, re.S | re.I)
+    head = m.group(0) if m else (re.search(r"<tr.*?</tr>", text, re.S | re.I) or re.search(r"$", text)).group(0)
+    cols = [c.lower() for c in _cells(head)]
+    idx: dict[str, int] = {}
+    for i, c in enumerate(cols):
+        if "рейтингуемое" in c or c.startswith("наименование") and "эмисси" not in c:
+            idx.setdefault("subject", i)
+        elif "эмисси" in c:
+            idx["issue"] = i
+        elif c.startswith("рейтинг") and "esg" not in c:
+            idx.setdefault("rating", i)
+        elif c == "isin":
+            idx["isin"] = i
+        elif c.startswith("дата"):
+            idx["date"] = i
+        elif "прогноз" in c:
+            idx["outlook"] = i
+    return idx
+
+
+def parse_table_with_header(text: str, agency: str, kind: str) -> list[Rating]:
+    idx = _header_map(text)
+    if "rating" not in idx or "subject" not in idx:
+        return parse_generic_table(text, agency, kind)
+    out: list[Rating] = []
+    body = re.search(r"<tbody.*?</tbody>", text, re.S | re.I)
+    for row in _ROW_RE.findall(body.group(0) if body else text):
+        cells = _cells(row)
+        if len(cells) <= max(idx["rating"], idx["subject"]):
+            continue
+        rating = normalize_rating(cells[idx["rating"]])
+        if not rating:
+            continue
+        subject = cells[idx["subject"]]
+        isin = ""
+        if "isin" in idx and idx["isin"] < len(cells):
+            m = _ISIN_RE.search(cells[idx["isin"]])
+            isin = m.group(1) if m else ""
+        if not isin and "issue" in idx and idx["issue"] < len(cells):
+            m = _ISIN_RE.search(cells[idx["issue"]])
+            isin = m.group(1) if m else ""
+        d = None
+        if "date" in idx and idx["date"] < len(cells):
+            dm = _DATE_RE.search(cells[idx["date"]])
+            if dm:
+                d = date(int(dm.group(3)), int(dm.group(2)), int(dm.group(1)))
+        out.append(Rating(subject=subject, agency=agency, rating=rating, date=d, kind=kind, isin=isin))
+    return out
+
+
+def load_nkr_tables() -> list[Rating]:
+    out: list[Rating] = []
+    for key, kind in (("nkr_issuers", "issuer"), ("nkr_issues", "issue")):
+        try:
+            code, _, text = fetch(CANDIDATES[key])
+        except Exception as e:  # noqa: BLE001
+            log.warning("НКР %s: %s", key, e)
+            continue
+        if code == 200:
+            got = parse_table_with_header(text, "НКР", kind)
+            log.info("НКР %s: %d записей", key, len(got))
+            out.extend(got)
     return out
