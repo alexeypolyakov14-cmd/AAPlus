@@ -10,7 +10,36 @@ import requests
 log = logging.getLogger(__name__)
 
 TG_API = "https://api.telegram.org/bot{token}/sendMessage"
+TG_UPDATES = "https://api.telegram.org/bot{token}/getUpdates"
+TG_ME = "https://api.telegram.org/bot{token}/getMe"
 CHUNK = 3900
+
+
+def telegram_whoami(token: Optional[str] = None, timeout: float = 20) -> list[dict]:
+    """Кто писал боту: [{chat_id, name, type, last_text}] — чтобы узнать TELEGRAM_CHAT_ID. Токен не печатается."""
+    token = token or os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    if not token:
+        raise RuntimeError("не задан TELEGRAM_BOT_TOKEN")
+    me = requests.get(TG_ME.format(token=token), timeout=timeout).json()
+    if not me.get("ok"):
+        raise RuntimeError(f"Telegram getMe: {me.get('description', me)}")
+    bot = me["result"].get("username", "?")
+    r = requests.get(TG_UPDATES.format(token=token), timeout=timeout).json()
+    if not r.get("ok"):
+        raise RuntimeError(f"Telegram getUpdates: {r.get('description', r)}")
+    chats: dict[int, dict] = {}
+    for upd in r.get("result", []):
+        msg = upd.get("message") or upd.get("channel_post") or upd.get("my_chat_member", {}) or {}
+        chat = msg.get("chat") or {}
+        if not chat.get("id"):
+            continue
+        name = chat.get("title") or " ".join(x for x in (chat.get("first_name"), chat.get("last_name")) if x) or chat.get("username") or ""
+        chats[chat["id"]] = {"chat_id": chat["id"], "name": name, "type": chat.get("type", ""), "last_text": (msg.get("text") or "")[:40]}
+    log.info("бот @%s, чатов: %d", bot, len(chats))
+    out = list(chats.values())
+    for c in out:
+        c["bot"] = bot
+    return out
 
 
 def telegram_send(text: str, token: Optional[str] = None, chat_id: Optional[str] = None, timeout: float = 20) -> int:

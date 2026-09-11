@@ -183,6 +183,10 @@ jobs:
           bondtrader report $BR --md report.md > /dev/null
           cat report.md >> "$GITHUB_STEP_SUMMARY"
           bondtrader monitor $BR --strict || echo "::warning::есть критические алерты по позициям — см. отчёт"
+      - name: Telegram — chat_id (если секрет TELEGRAM_CHAT_ID ещё не задан)
+        if: env.TELEGRAM_BOT_TOKEN != '' && env.TELEGRAM_CHAT_ID == ''
+        continue-on-error: true
+        run: bondtrader notify --whoami
       - name: Telegram
         if: env.TELEGRAM_BOT_TOKEN != '' && env.TELEGRAM_CHAT_ID != ''
         continue-on-error: true

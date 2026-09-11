@@ -468,7 +468,16 @@ def cmd_report(args, settings):
 
 
 def cmd_notify(args, settings):
-    from .notify import strip_markdown, telegram_send
+    from .notify import strip_markdown, telegram_send, telegram_whoami
+    if args.whoami:
+        chats = telegram_whoami()
+        if not chats:
+            print("Боту ещё никто не писал: откройте бота в Telegram, нажмите Start и отправьте любое сообщение, затем повторите.")
+            return
+        print(f"Бот @{chats[0]['bot']}. Чаты, писавшие боту (значение для секрета TELEGRAM_CHAT_ID):")
+        for c in chats:
+            print(f"  chat_id={c['chat_id']}  {c['type']}  {c['name']}  «{c['last_text']}»")
+        return
     text = open(args.file, encoding="utf-8").read() if args.file else (args.text or "")
     if not text.strip():
         raise SystemExit("нечего отправлять: --file или --text")
@@ -966,7 +975,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--broker", choices=["paper", "tinvest"]); sp.add_argument("--live", action="store_true")
     sp.add_argument("--md", help="сохранить в файл"); sp.add_argument("--telegram", action="store_true", help="отправить в Telegram (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)")
     sp.set_defaults(fn=cmd_report)
-    sp = sub.add_parser("notify", parents=[common], help="отправить текст/файл в Telegram"); sp.add_argument("--file"); sp.add_argument("--text"); sp.set_defaults(fn=cmd_notify)
+    sp = sub.add_parser("notify", parents=[common], help="отправить текст/файл в Telegram"); sp.add_argument("--file"); sp.add_argument("--text")
+    sp.add_argument("--whoami", action="store_true", help="показать chat_id тех, кто писал боту (для секрета TELEGRAM_CHAT_ID)"); sp.set_defaults(fn=cmd_notify)
     sp = sub.add_parser("portfolio", parents=[common], help="состояние портфеля и риск-метрики"); screen_opts(sp)
     sp.add_argument("--broker", choices=["paper", "tinvest"]); sp.set_defaults(fn=cmd_portfolio)
     sp = sub.add_parser("backtest", parents=[common], help="бэктест стратегии на истории MOEX"); screen_opts(sp); strat_opts(sp)
