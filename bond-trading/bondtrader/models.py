@@ -102,14 +102,20 @@ class Bond:
         """
         if self.is_ofz:
             return "МИНФИН"
+        if self.full_name:
+            key = issuer_key_of(self.full_name, words=2)
+            if len(key) >= 3:
+                return key
         return issuer_key_of(self.name or self.secid)
 
 
 _ISSUER_PREFIX_RE = re.compile(r"^[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё ]*")
 _SERIES_TAIL_RE = re.compile(r"\s*(ПБО|БО|БП|ПБ|П|Б|Р)$")
+_LEGAL_FORMS = {"ПАО", "АО", "ООО", "МКПАО", "ЗАО", "ОАО", "НКО", "ЛК", "ГК", "ТД", "ПКО", "МФК", "МКК", "АКБ", "КБ", "ИК", "УК", "СК", "ФК"}
 
 
-def issuer_key_of(name: str) -> str:
+def issuer_key_of(name: str, words: int = 0) -> str:
+    """Буквенный префикс названия без маркера серии и организационно-правовых форм; words>0 — не больше N слов."""
     m = _ISSUER_PREFIX_RE.match(name or "")
     key = (m.group(0) if m else (name or "")).strip()
     if not key:
@@ -117,7 +123,10 @@ def issuer_key_of(name: str) -> str:
     stripped = _SERIES_TAIL_RE.sub("", key).strip()
     if len(stripped) >= 3:
         key = stripped
-    return key.upper().rstrip(",.-")
+    toks = [t for t in key.split() if t.upper() not in _LEGAL_FORMS] or key.split()
+    if words:
+        toks = toks[:words]
+    return " ".join(toks).upper().rstrip(",.-")
 
 
 @dataclass

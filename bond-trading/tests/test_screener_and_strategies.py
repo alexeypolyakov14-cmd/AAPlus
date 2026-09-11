@@ -216,3 +216,35 @@ def test_issuer_key_merges_series_suffixes():
     assert issuer_key_of("iКарРус1P6") == "IКАРРУС" and issuer_key_of("СЕРГВ БО-2") == "СЕРГВ"
     assert issuer_key_of("NSKATD-03") == issuer_key_of("NSKATD1Р01")
     assert issuer_key_of("АПРИ 2Р13") == "АПРИ" and issuer_key_of("ВИС Ф БП04") == "ВИС Ф"
+
+
+def test_issuer_key_prefers_full_name_without_legal_forms():
+    from bondtrader.models import Bond
+    a = Bond("A", name="Сегежа3P6R", full_name="Сегежа Групп 003P-06R")
+    b = Bond("B", name="Сегеж3P10R", full_name="Сегежа Групп ПАО 003P-10R")
+    assert a.issuer_key == b.issuer_key == "СЕГЕЖА ГРУПП"
+    assert Bond("C", name="Роделен2P3", full_name="ЛК Роделен БО 002P-03").issuer_key == "РОДЕЛЕН"
+
+
+def test_gspread_peers_ranking():
+    from bondtrader.data.ratings import Rating
+    from bondtrader.models import Bond, BondMetrics, Quote
+    from bondtrader.screener import ScreenRow
+    from bondtrader.strategies import MarketContext, make_strategy
+    from bondtrader.portfolio import Portfolio
+    from datetime import date
+
+    def row(secid, spread, rating):
+        b = Bond(secid, name=secid)
+        q = Quote(secid, date(2025, 6, 2), price=100.0, turnover=5e6)
+        m = BondMetrics(secid, 100.0, 1000.0, 20.0, None, 20.0, 1.5, 1.3, 0, 0.1, 1.5, 15, spread)
+        return ScreenRow(b, q, m, rating=Rating("x", "y", rating) if rating else None)
+    rows = [row("A1", 500, "A"), row("A2", 600, "A"), row("A3", 900, "A"),        # A3 платит +300 к медиане A
+            row("B1", 1500, "BB"), row("B2", 1550, "BB"), row("B3", 1400, "BB")]   # BB1..3 около медианы
+    ctx = MarketContext(date(2025, 6, 2), rows, None, None, Portfolio(cash=1e6))
+    st = make_strategy("gspread", {"top_n": 2, "rank": "peers", "min_excess_bp": 0, "min_peers": 3, "per_issuer": 0})
+    w = st.targets(ctx)
+    assert list(w) == ["A3", "B2"]                      # A3 (+300) выше B2 (+50), хотя сырой спред B2 втрое больше
+    assert "к медиане ступени A (600)" in st.explain(ctx)["A3"]
+    st2 = make_strategy("gspread", {"top_n": 5, "rank": "peers", "min_excess_bp": 50, "per_issuer": 0})
+    assert list(st2.targets(ctx)) == ["A3", "B2"]       # только те, кто платит больше соседей хотя бы на 50 б.п.
