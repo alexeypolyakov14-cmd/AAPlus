@@ -37,10 +37,11 @@ class MarketSnapshot:
     issuers: Optional[IssuerMap] = None
     events: Optional[EventsBook] = None
     news: Optional[NewsBook] = None
+    describe: Optional[Callable[[Bond], dict]] = None   # описание бумаги MOEX ISS (флаги дефолта)
 
     def screen_kwargs(self) -> dict:
         return {"enrich": self.enrich, "ratings": self.ratings, "financials": self.financials,
-                "issuers": self.issuers, "events": self.events, "news": self.news}
+                "issuers": self.issuers, "events": self.events, "news": self.news, "describe": self.describe}
 
 
 def load_ratings(settings: Settings) -> Optional[RatingsBook]:
@@ -93,7 +94,8 @@ def load_snapshot(settings: Settings, fixtures_dir: Optional[str] = None, client
     except Exception as e:  # noqa: BLE001
         log.warning("ключевая ставка ЦБ недоступна: %s", e)
     return MarketSnapshot(today, universe, curve, kr, kr_hist, enrich=client.enrich, source="moex", ratings=ratings,
-                          financials=financials, issuers=issuers, events=events, news=news)
+                          financials=financials, issuers=issuers, events=events, news=news,
+                          describe=lambda b: client.security_description(b.secid))
 
 
 def _load_fixtures(d: str) -> MarketSnapshot:

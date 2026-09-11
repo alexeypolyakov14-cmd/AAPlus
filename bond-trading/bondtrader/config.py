@@ -42,7 +42,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "min_fin_score": 0.0,
         "require_financials": False,
         "news_days": 90,
-        "news_stop_score": -4.0,
+        "news_stop_score": -8.0,
+        "exclude_moex_defaults": True,
     },
     "risk": {
         "max_weight_per_bond": 0.10,

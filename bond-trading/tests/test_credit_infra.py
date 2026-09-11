@@ -135,12 +135,20 @@ def test_news_parse_score_and_decay(tmp_path):
     assert len(items) == 3 and items[0][0] == date(2025, 5, 26) and items[0][3] == "Интерфакс"
     assert score_title(items[0][1])[0] <= -4 and "default" in score_title(items[0][1])[1]
     assert score_title(items[1][1])[0] > 0 and score_title(items[2][1]) == (0.0, ["routine"])
+    # ложные срабатывания: «выпуск» ≠ СК, «искусство» ≠ иск; блоги и вопросы не считаются
+    assert score_title("Автобан погасил пятилетний выпуск облигаций")[1] == ["paid"]
+    assert score_title("Бобровский — эталон вратарского искусства") == (0.0, [])
+    assert "lawsuit" in score_title("ГТЛК подала иск к EasyJet")[1] and "criminal" not in score_title("ГТЛК подала иск к EasyJet")[1]
+    assert score_title("Балтийский лизинг: сможет ли он расплатиться?")[1][-1] == "blog"
+    assert score_title("Дефолт близко", "google:Smart-Lab") == (0.0, ["default", "blog"])
+    assert "criminal" in score_title("СК возбудил дело против гендиректора")[1]
     book = NewsBook()
     for d, title, link, _ in items:
         sc, tags = score_title(title)
         book.add(NewsItem(d, "Ромашка", "google", title, link, "", sc, ",".join(tags)))
     ns = book.issuer_score(SETTLE, name="Ромашка ООО БО-01", days=90)
     assert ns.n == 3 and ns.negative == 1 and ns.positive == 1 and ns.worst.date == date(2025, 5, 26)
+    assert ns.stop is not None and ns.stop.tags.startswith("default")
     assert -4.0 < ns.score < -1.0     # затухание: свежий дефолт (−4·0.85) + старый плюс (2·0.48)
     far = book.issuer_score(SETTLE + timedelta(days=400), name="Ромашка", days=90)
     assert far.n == 0 and far.score == 0
@@ -221,11 +229,16 @@ def test_screener_uses_books_and_value_hy_ranks(universe, curve):
     assert any(ids[s].bond.is_ofz for s in targets) and abs(sum(targets.values()) - 1.0) < 1e-9
     reason = strat.explain(ctx)["RU000A103WV8"]
     assert "композит" in reason and "балл 100" in reason and "новости +" in reason
-    # news_stop_score отсекает свежий сильный негатив
-    bad_news = NewsBook([NewsItem(date(2025, 5, 30), "ВИС Финанс", "google", "ВИС Финанс допустила дефолт", "", "1", -4.0, "default")])
+    # новость СМИ о дефолте — стоп; та же новость из блога — нет; флаг дефолта в реестре MOEX — стоп
+    bad_news = NewsBook([NewsItem(date(2025, 5, 30), "ВИС Финанс", "google:Интерфакс", "ВИС Финанс допустила дефолт", "", "1", -4.0, "default"),
+                         NewsItem(date(2025, 5, 29), "Газпром нефть", "google:Smart-Lab", "Газпром нефть: дефолт?", "", "2", 0.0, "default,blog")])
     scr2 = Screener(ScreenerConfig(min_turnover=1e6, max_list_level=2, max_bid_ask_pct=1.0))
-    rows2 = scr2.run(universe, curve, SETTLE, financials=fin, issuers=issuers, news=bad_news)
-    assert "RU000A103WV8" not in {r.secid for r in rows2} and scr2.rejected["RU000A103WV8"].startswith("новости")
+    rows2 = scr2.run(universe, curve, SETTLE, issuers=issuers, news=bad_news,
+                     describe=lambda b: {"HASDEFAULT": "0", "HASTECHNICALDEFAULT": "1"} if b.secid == "RU000A104ZK2" else {})
+    ids2 = {r.secid for r in rows2}
+    assert "RU000A103WV8" not in ids2 and scr2.rejected["RU000A103WV8"].startswith("новости: default")
+    assert "RU000A107RZ0" in ids2
+    assert "RU000A104ZK2" not in ids2 and "технический дефолт" in scr2.rejected["RU000A104ZK2"]
 
 
 def test_cli_books_commands(tmp_path, capsys):

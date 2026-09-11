@@ -1,6 +1,7 @@
 """Скринер облигаций: фильтры качества/ликвидности + расчёт метрик + скоринг."""
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass, field
 from datetime import date
@@ -13,6 +14,8 @@ from .analytics.curve import ZeroCurve
 from .data.ratings import Rating, RatingsBook, rating_at_least
 from .data.sectors import sector_of
 from .models import Bond, BondMetrics, Quote
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover
     from .data.disclosure import DisclosureEvent, EventsBook
@@ -85,7 +88,8 @@ class ScreenerConfig:
     min_fin_score: float = 0.0       # отсев по баллу отчётности (0 — не применять); бумаги без отчётности не трогаем
     require_financials: bool = False # без отчётности — отсев (кроме ОФЗ)
     news_days: int = 90              # окно новостного фона
-    news_stop_score: float = -4.0    # суммарный балл за окно или одна новость ниже порога — отсев (дефолт/банкротство в свежих новостях)
+    news_stop_score: float = -8.0    # суммарный балл новостей за окно ниже порога — отсев; одна новость СМИ о дефолте/банкротстве/отзыве лицензии — отсев всегда
+    exclude_moex_defaults: bool = True  # флаги HASDEFAULT/HASTECHNICALDEFAULT из описания бумаги на MOEX ISS
 
     @classmethod
     def from_dict(cls, d: dict) -> "ScreenerConfig":
@@ -145,10 +149,12 @@ class Screener:
     def run(self, universe: list[tuple[Bond, Quote]], curve: Optional[ZeroCurve], settle: date,
             enrich: Optional[Callable[[Bond], Bond]] = None, ratings: Optional[RatingsBook] = None,
             financials: Optional["FinancialsBook"] = None, issuers: Optional["IssuerMap"] = None,
-            events: Optional["EventsBook"] = None, news: Optional["NewsBook"] = None) -> list[ScreenRow]:
+            events: Optional["EventsBook"] = None, news: Optional["NewsBook"] = None,
+            describe: Optional[Callable[[Bond], dict]] = None) -> list[ScreenRow]:
         """universe — пары (Bond, Quote); enrich — функция подгрузки графика (например MoexClient.enrich);
         ratings — книга рейтингов (ОФЗ считаются AAA); financials/issuers — отчётность и карта ИНН;
-        events — книга существенных фактов e-disclosure (стоп-факторы)."""
+        events — книга существенных фактов e-disclosure (стоп-факторы); describe — описание бумаги MOEX ISS
+        (флаги дефолта HASDEFAULT/HASTECHNICALDEFAULT), вызывается только для прошедших остальные фильтры."""
         rows: list[ScreenRow] = []
         self.rejected = {}
         c = self.cfg
@@ -171,7 +177,10 @@ class Screener:
             ns = None
             if news is not None and not bond.is_ofz:
                 ns = news.issuer_score(settle, name=bond.full_name or bond.name, inn=inn, days=c.news_days)
-                if ns.n and (ns.score <= c.news_stop_score or (ns.worst is not None and ns.worst.score <= c.news_stop_score)):
+                if ns.stop is not None:
+                    self.rejected[bond.secid] = f"новости: {ns.stop.tags.split(',')[0]} {ns.stop.date} ({ns.stop.title[:50]})"
+                    continue
+                if ns.n and ns.score <= c.news_stop_score:
                     self.rejected[bond.secid] = f"новости: балл {ns.score:+.1f} ({ns.worst.title[:50] if ns.worst else ''})"
                     continue
             if not bond.is_ofz:
@@ -213,6 +222,16 @@ class Screener:
             if why:
                 self.rejected[bond.secid] = why
                 continue
+            moex_default = ""
+            if describe is not None and c.exclude_moex_defaults and not bond.is_ofz:
+                try:
+                    moex_default = moex_default_flag(describe(bond))
+                except Exception as e:  # noqa: BLE001
+                    moex_default = ""
+                    log.debug("%s: описание MOEX недоступно: %s", bond.secid, e)
+                if moex_default:
+                    self.rejected[bond.secid] = moex_default
+                    continue
             flags = []
             if bond.has_offer and bond.offer_date and bond.offer_date > settle:
                 flags.append("оферта")
@@ -251,6 +270,17 @@ class Screener:
         zl = z([math.log1p(r.quote.turnover) for r in rows])
         for r, a, b, c in zip(rows, zy, zs, zl):
             r.score = 0.5 * a + 0.3 * b + 0.2 * c
+
+
+def moex_default_flag(desc: dict) -> str:
+    """'' если дефолтов нет; иначе текст причины по флагам описания бумаги MOEX ISS."""
+    def truthy(v) -> bool:
+        return str(v).strip().lower() in ("1", "true", "yes", "да", "y")
+    if truthy(desc.get("HASDEFAULT")):
+        return "дефолт (реестр MOEX)"
+    if truthy(desc.get("HASTECHNICALDEFAULT")):
+        return "технический дефолт (реестр MOEX)"
+    return ""
 
 
 def to_dataframe(rows: list[ScreenRow]) -> pd.DataFrame:

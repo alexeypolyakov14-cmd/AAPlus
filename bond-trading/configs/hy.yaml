@@ -30,7 +30,8 @@ screener:
   min_fin_score: 0             # балл отчётности (0 — не отсекать; стоп-факторы по капиталу/покрытию работают отдельно)
   require_financials: false    # включить, когда книга отчётности покроет скрин
   news_days: 90
-  news_stop_score: -4          # свежая новость про дефолт/банкротство/обыски — отсев
+  news_stop_score: -8          # суммарный негатив за 90 дней; одна новость СМИ о дефолте/банкротстве — отсев всегда
+  exclude_moex_defaults: true  # флаги дефолта в реестре MOEX (описание бумаги в ISS)
 
 risk:
   max_weight_per_bond: 0.04       # ≈500 тыс. при 12 млн
@@ -40,6 +41,7 @@ risk:
   min_portfolio_duration: 0.5
   max_portfolio_duration: 2.5
   max_g_spread_bp: 2000
+  min_list_level: 3               # риск-лимиты допускают 3-й уровень (как и скринер), иначе ВДО отсекаются на этапе eligible
   max_turnover_share: 0.05
   yield_vol_bp_daily: 40          # спреды ВДО ходят сильнее ОФЗ
   max_unrated_share: 0.25         # не более четверти портфеля в бумагах без рейтинга

@@ -45,20 +45,25 @@ GENERAL_FEEDS = {
 LEXICON: list[tuple[str, float, re.Pattern]] = [
     ("default", -4.0, re.compile(r"дефолт|не (?:выплат|исполн)|просроч|невыплат", re.I)),
     ("bankruptcy", -4.0, re.compile(r"банкрот|несостоятельн|конкурсн\w+ (?:производств|управля)|ликвидац", re.I)),
-    ("criminal", -3.0, re.compile(r"обыск|задержан|арестован|уголовн|мошеннич|под стражу|СК\b|следственн", re.I)),
+    ("criminal", -3.0, re.compile(r"обыск|задержан|арестован|уголовн|мошеннич|под стражу|следственн\w+ комитет|\bСКР?\b(?=.*(?:возбуд|дело|обыск|задерж))")),
     ("license", -3.0, re.compile(r"отзыв\w* лиценз|лишил\w* лиценз|аннулир\w* лиценз|исключ\w* из реестра", re.I)),
     ("restructuring", -3.0, re.compile(r"реструктуризац|ПВО\b|собрани\w+ владельцев облигаций|отсрочк\w+ (?:выплат|платеж)", re.I)),
     ("sanctions", -2.0, re.compile(r"санкци|SDN|блокирующ", re.I)),
     ("rating_down", -2.0, re.compile(r"(?:пониз|сниз|ухудш)\w* (?:кредитн\w+ )?рейтинг|рейтинг\w* (?:пониж|сниж)|негативн\w+ прогноз|под наблюдени", re.I)),
-    ("lawsuit", -1.5, re.compile(r"\bиск\w*\b|арбитраж|судебн|взыска|претензи|ФНС|налогов\w+ (?:претенз|задолж|проверк)", re.I)),
+    ("lawsuit", -1.5, re.compile(r"\bиск(?:а|у|ом|е|и|ов|ам|ами|ах)?\b|подал\w* в суд|арбитраж|судебн\w+ (?:иск|разбират|спор|процесс)|взыска|"
+                                   r"претензи\w+ (?:ФНС|налогов)|ФНС (?:втянул|предъяв|подал|взыск|доначисл)|налогов\w+ (?:претенз|задолж|проверк|доначисл)", re.I)),
     ("loss", -1.5, re.compile(r"убыт(?:ок|ки|очн)|падени\w+ (?:выручк|прибыл)|сокращ\w+ (?:выручк|прибыл)|отрицательн\w+ (?:капитал|денежн)", re.I)),
     ("management", -1.0, re.compile(r"отставк|уволен|сменил\w* (?:гендиректор|руководител|собственник)|смена (?:собственник|владельц|руководств)", re.I)),
     ("debt", -1.0, re.compile(r"долгов\w+ нагрузк|задолженност|кредитор\w* требу|не смог\w* (?:рефинанс|погасить)", re.I)),
     ("rating_up", 2.0, re.compile(r"(?:повыс|повыш|улучш)\w* (?:кредитн\w+ )?рейтинг|рейтинг\w* (?:повыш|подтвержд)|позитивн\w+ прогноз|стабильн\w+ прогноз", re.I)),
-    ("paid", 1.5, re.compile(r"(?:выплат|погас)\w* (?:купон|облигац|долг|выпуск)|исполнил\w* (?:обязательств|оферт)|досрочно погас", re.I)),
+    ("paid", 1.5, re.compile(r"(?:выплат|погас)\w*(?:\s+\S+){0,2}\s+(?:купон|облигац|долг|выпуск)|исполнил\w* (?:обязательств|оферт)|досрочно погас", re.I)),
     ("growth", 1.0, re.compile(r"рост\w* (?:выручк|прибыл|портфел)|увелич\w* (?:выручк|прибыл)|рекордн\w+ (?:выручк|прибыл)|чист\w+ прибыл\w+ (?:выросл|увелич)", re.I)),
     ("deal", 1.0, re.compile(r"контракт|соглашени|привлек\w* (?:кредит|финансиров|инвестиц)|IPO|SPO|дивиденд", re.I)),
 ]
+# Блоги/форумы/соцсети: мнения, а не факты — в балл не входят (сохраняются с тегом blog для просмотра)
+BLOG_RE = re.compile(r"smart-?lab|смарт-?лаб|пульс|дзен|dzen|vk\.com|вконтакте|telegram|t\.me|пост инвестора|блог|forum|форум|pikabu|пикабу|"
+                     r"投资|investing\.com|tinkoff\.ru/invest|бкс экспресс", re.I)
+STOP_TAGS = {"default", "bankruptcy", "license"}   # одна такая новость из СМИ — стоп-фактор
 NOISE_RE = re.compile(r"разме(?:щ|ст)\w+ (?:облигаци|выпуск)|купон\w* ставк|ставк\w* купон|книг\w* заявок|сбор заявок|ориентир", re.I)  # рутина первичного рынка — не сигнал
 
 
@@ -82,6 +87,7 @@ class NewsScore:
     score: float = 0.0            # сумма весов с затуханием по времени
     worst: Optional[NewsItem] = None
     items: list[NewsItem] = field(default_factory=list)
+    stop: Optional[NewsItem] = None   # новость из СМИ с тегом дефолт/банкротство/отзыв лицензии за окно
 
     def describe(self) -> str:
         if not self.n:
@@ -90,7 +96,7 @@ class NewsScore:
         return f"новостей {self.n} (негатив {self.negative}, позитив {self.positive}), балл {self.score:+.1f}{w}"
 
 
-def score_title(title: str) -> tuple[float, list[str]]:
+def score_title(title: str, source: str = "") -> tuple[float, list[str]]:
     t = html.unescape(title or "")
     score, tags = 0.0, []
     for tag, w, rx in LEXICON:
@@ -99,6 +105,10 @@ def score_title(title: str) -> tuple[float, list[str]]:
             tags.append(tag)
     if not tags and NOISE_RE.search(t):
         tags.append("routine")
+    if BLOG_RE.search(f"{source} {t}") or "?" in t:
+        # мнения и вопросы («сможет ли расплатиться?») не считаем фактами
+        tags.append("blog")
+        score = 0.0
     return score, tags
 
 
@@ -179,8 +189,9 @@ def search_news(name: str, sources: Iterable[str] = ("google", "bing"), days: in
                 continue
             # у Google в заголовке хвост « - Издание»; отрезаем
             title = re.sub(r"\s+[-–—]\s+[^-–—]{2,40}$", "", title)
-            sc, tags = score_title(title)
-            out.append(NewsItem(d, name, f"{src}:{publisher}"[:60], title, link, inn, sc, ",".join(tags)))
+            source = f"{src}:{publisher}"[:60]
+            sc, tags = score_title(title, source)
+            out.append(NewsItem(d, name, source, title, link, inn, sc, ",".join(tags)))
     return out
 
 
@@ -201,7 +212,7 @@ def scan_general_feeds(names: list[str], feeds: Optional[dict[str, str]] = None,
                 continue
             for name in names:
                 if issuer_match(name, title):
-                    sc, tags = score_title(title)
+                    sc, tags = score_title(title, src)
                     out.append(NewsItem(d, name, src, title, link, "", sc, ",".join(tags)))
                     break
     return out
@@ -253,6 +264,8 @@ class NewsBook:
                 ns.negative += 1
                 if ns.worst is None or it.score < ns.worst.score:
                     ns.worst = it
+                if STOP_TAGS & set(it.tags.split(",")) and "blog" not in it.tags and (ns.stop is None or it.date > ns.stop.date):
+                    ns.stop = it
             elif it.score > 0:
                 ns.positive += 1
         ns.items.sort(key=lambda x: x.date, reverse=True)
@@ -308,5 +321,5 @@ def discover(query: str = "Балтийский лизинг") -> None:
         if not items:
             print("   head: " + re.sub(r"\s+", " ", text[:300]))
         for d, title, link, pub in items[:5]:
-            sc, tags = score_title(title)
+            sc, tags = score_title(title, f"{name}:{pub}")
             print(f"   {d} [{sc:+.1f} {','.join(tags) or '-'}] {title[:100]}  ({pub[:25]})")

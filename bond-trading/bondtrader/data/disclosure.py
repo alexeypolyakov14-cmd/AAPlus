@@ -85,8 +85,11 @@ def classify(title: str) -> str:
 def looks_like_challenge(status: int, text: str) -> bool:
     if status in (403, 429, 503):
         return True
-    low = text[:4000].lower()
-    return any(k in low for k in ("challenge", "ddos-guard", "проверка браузера", "checking your browser", "captcha", "qrator"))
+    low = text[:6000].lower()
+    if any(k in low for k in ("challenge", "ddos-guard", "проверка браузера", "checking your browser", "captcha", "qrator")):
+        return True
+    # JS-заглушка e-disclosure: пустая страница со спиннером и <noscript><meta http-equiv="refresh" ...>
+    return "<noscript><meta http-equiv=\"refresh\"" in low.replace("'", '"') and "spinner" in low
 
 
 class EdisclosureClient:
