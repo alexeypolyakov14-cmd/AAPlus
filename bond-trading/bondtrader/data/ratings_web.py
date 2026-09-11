@@ -85,6 +85,34 @@ def discover(names: Optional[list[str]] = None, sample: int = 1200) -> None:
         print("   text sample: " + body[max(i - 200, 0): max(i - 200, 0) + sample])
 
 
+def discover_deep(urls: Optional[list[str]] = None) -> None:
+    """Формы, пагинация и ajax-подсказки на страницах агентств."""
+    urls = urls or ["https://raexpert.ru/ratings/credits_all/", "https://raexpert.ru/all-services/rating-export",
+                    "https://www.acra-ratings.ru/ratings/issuers/", "https://www.acra-ratings.ru/ratings/emissions/"]
+    for url in urls:
+        try:
+            code, ctype, text = fetch(url)
+        except Exception as e:  # noqa: BLE001
+            print(f"== {url}\n   ERROR {e}")
+            continue
+        print(f"== {url}  HTTP {code} len={len(text)}")
+        for m in re.finditer(r"<form[^>]*>(.*?)</form>", text, re.S | re.I):
+            tag = re.search(r"<form[^>]*>", m.group(0), re.I).group(0)
+            inputs = re.findall(r"""<(?:input|select|textarea)[^>]*name=["']([^"']+)["'][^>]*""", m.group(1), re.I)
+            print(f"   FORM {tag[:200]} inputs={inputs[:25]}")
+        pag = sorted(set(re.findall(r"""href=["']([^"']*(?:page|PAGEN|offset|start)=[^"']*)["']""", text, re.I)))[:15]
+        print(f"   pagination hrefs: {pag}")
+        ajax = sorted(set(re.findall(r"""["']([^"']*(?:ajax|\.php|api/|json)[^"']{0,100})["']""", text, re.I)))[:30]
+        print(f"   ajax-like: {ajax}")
+        data_attrs = sorted(set(re.findall(r"""data-(?:url|src|ajax|action|load)=["']([^"']+)["']""", text, re.I)))[:15]
+        print(f"   data-url attrs: {data_attrs}")
+        rows = len(re.findall(r"<tr", text, re.I))
+        print(f"   <tr> count: {rows}; 'Показать ещё'/'load more' hits: {len(re.findall(r'(?i)показать ещ|load more|ещё', text))}")
+        for m in list(re.finditer(r"(?i)pagination|paginat|b-pager|pager", text))[:3]:
+            i = m.start()
+            print("   near pager: " + re.sub(r"\s+", " ", text[max(0, i - 300): i + 500])[:800])
+
+
 # ---------------------------------------------------------------------------
 # Парсеры (заполняются после discover)
 # ---------------------------------------------------------------------------
@@ -305,17 +333,25 @@ def load_raexpert(max_pages: int = 60) -> list[Rating]:
     for key, (kind, url) in RAEXPERT_SECTIONS.items():
         seen: set[tuple] = set()
         n_section = 0
+        scheme = None  # какая схема пагинации сработала: ?page=, ?PAGEN_1=, ?p=
         for page in range(1, max_pages + 1):
-            u = url if page == 1 else f"{url}?page={page}"
-            try:
-                code, _, text = fetch(u)
-            except Exception as e:  # noqa: BLE001
-                log.warning("Эксперт РА %s: %s", u, e)
-                break
-            if code != 200:
-                break
-            got = parse_table_with_header(text, "Эксперт РА", kind)
-            new = [r for r in got if (r.subject, r.rating, r.date) not in seen]
+            candidates = [url] if page == 1 else ([f"{url}?{scheme}={page}"] if scheme else
+                                                  [f"{url}?page={page}", f"{url}?PAGEN_1={page}", f"{url}?p={page}"])
+            new: list[Rating] = []
+            for u in candidates:
+                try:
+                    code, _, text = fetch(u)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("Эксперт РА %s: %s", u, e)
+                    continue
+                if code != 200:
+                    continue
+                got = parse_table_with_header(text, "Эксперт РА", kind)
+                new = [r for r in got if (r.subject, r.rating, r.date) not in seen]
+                if new:
+                    if page > 1 and not scheme:
+                        scheme = u.split("?")[1].split("=")[0]
+                    break
             if not new:
                 break
             for r in new:

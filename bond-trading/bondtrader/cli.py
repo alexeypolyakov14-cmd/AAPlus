@@ -349,8 +349,11 @@ def cmd_sandbox_init(args, settings):
 def cmd_ratings(args, settings):
     from .data.ratings import RatingsBook
     if args.action == "discover":
-        from .data.ratings_web import discover
-        discover(args.names)
+        from .data.ratings_web import discover, discover_deep
+        if args.deep:
+            discover_deep(args.names or None)
+        else:
+            discover(args.names)
         return
     if args.action == "fetch":
         from .data.ratings_web import load_nkr, load_nkr_tables, load_raexpert
@@ -449,7 +452,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("strategies", parents=[common], help="список стратегий"); sp.set_defaults(fn=cmd_strategies)
     sp = sub.add_parser("ratings", parents=[common], help="кредитные рейтинги: list | show SECID | coverage | discover")
     sp.add_argument("action", choices=["list", "show", "coverage", "discover", "fetch"]); sp.add_argument("secid", nargs="?")
-    sp.add_argument("--names", nargs="*", help="для discover: какие источники смотреть")
+    sp.add_argument("--names", nargs="*", help="для discover: какие источники смотреть (для --deep: список URL)")
+    sp.add_argument("--deep", action="store_true", help="для discover: формы, пагинация, ajax")
     sp.add_argument("--pages", type=int, default=3, help="для fetch --press: сколько страниц пресс-релизов НКР")
     sp.add_argument("--press", action="store_true", help="для fetch: дополнительно разобрать пресс-релизы НКР")
     sp.add_argument("--sources", nargs="*", choices=["nkr", "raexpert"], help="для fetch: источники (по умолчанию все)"); screen_opts(sp); sp.set_defaults(fn=cmd_ratings)
