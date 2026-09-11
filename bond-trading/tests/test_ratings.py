@@ -203,6 +203,12 @@ def test_moex_sector_prefix_and_acra_press():
     <div class="item__title-row"><a class="item__title" href="/press-releases/7262/"> АКРА ОТОЗВАЛО КРЕДИТНЫЙ РЕЙТИНГ АО «Х» BB(RU) </a></div></div></div>"""
     rs = parse_acra_press(html)
     assert [(r.subject, r.rating, r.kind) for r in rs] == [('ООО "СК "ИНСАЙТ"', "A", "issuer"), ("ПАО «ГК «Самолет»", "A-", "issue")]
+    # отзыв, встреченный раньше (новее), гасит более старый рейтинг того же субъекта
+    withdrawn = set()
+    older = html.replace("ООО &quot;СК &quot;ИНСАЙТ&quot;", "АО «Х»").replace("ООО «СК «ИНСАЙТ»", "АО «Х»")
+    parse_acra_press(html, withdrawn)
+    assert "АО «Х»" in withdrawn
+    assert all(r.subject != "АО «Х»" for r in parse_acra_press(older, withdrawn))
     assert rs[0].date == date(2026, 9, 10) and rs[0].agency == "АКРА"
     book = RatingsBook(rs)
     assert book.lookup(Bond(secid="RU000A10BW96", name="СамолетP18", full_name="ГК Самолет БО-П18")).rating == "A-"

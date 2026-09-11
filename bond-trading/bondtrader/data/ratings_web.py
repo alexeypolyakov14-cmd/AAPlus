@@ -468,8 +468,9 @@ _ACRA_LEVEL_RE = re.compile(r"(?:ДО УРОВНЯ|НА УРОВНЕ|УРОВН�
 _ACRA_ANY_RE = re.compile(r"([ABC]{1,3}[+-]?)\(RU\)")
 
 
-def parse_acra_press(text: str) -> list[Rating]:
-    """Пресс-релизы АКРА -> рейтинги. Отзывы пропускаются; выпуски помечаются kind=issue."""
+def parse_acra_press(text: str, withdrawn: Optional[set] = None) -> list[Rating]:
+    """Пресс-релизы АКРА -> рейтинги. Отзывы пропускаются и (если передан withdrawn) запоминаются;
+    релизы идут от новых к старым, поэтому рейтинг субъекта, отозванный позже, не учитывается."""
     out: list[Rating] = []
     # дата ищется в окрестности элемента (после заголовка)
     for m in _ACRA_ITEM_RE.finditer(text):
@@ -477,6 +478,10 @@ def parse_acra_press(text: str) -> list[Rating]:
         title = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", m.group(3)))).strip()
         up = title.upper()
         if "ОТОЗВАЛО" in up or "ОТЗЫВ" in up or "ПРЕКРАТИЛО" in up:
+            if withdrawn is not None and "ВЫПУСК" not in up and "ОБЛИГАЦ" not in up:
+                withdrawn.add(emit or title)
+            continue
+        if withdrawn and (emit or title) in withdrawn and not re.search(r"ВЫПУСК|ОБЛИГАЦ", up):
             continue
         rm = _ACRA_LEVEL_RE.search(title) or _ACRA_ANY_RE.search(title)
         if not rm:
@@ -492,10 +497,12 @@ def parse_acra_press(text: str) -> list[Rating]:
     return out
 
 
-def load_acra_press(max_pages: int = 40) -> list[Rating]:
-    """Обход пресс-релизов АКРА: ?PAGEN_1=N (Bitrix). Останавливается, когда новых записей нет."""
+def load_acra_press(max_pages: int = 120) -> list[Rating]:
+    """Обход пресс-релизов АКРА: ?PAGEN_1=N (Bitrix), ~30 релизов на страницу, 120 страниц ≈ год.
+    Останавливается, когда новых записей нет."""
     out: list[Rating] = []
     seen: set[tuple] = set()
+    withdrawn: set[str] = set()
     for page in range(1, max_pages + 1):
         url = CANDIDATES["acra_press"] + (f"?PAGEN_1={page}" if page > 1 else "")
         try:
@@ -505,7 +512,7 @@ def load_acra_press(max_pages: int = 40) -> list[Rating]:
             break
         if code != 200:
             break
-        got = parse_acra_press(text)
+        got = parse_acra_press(text, withdrawn)
         new = [r for r in got if (r.subject, r.rating, r.date, r.kind) not in seen]
         if not new:
             break

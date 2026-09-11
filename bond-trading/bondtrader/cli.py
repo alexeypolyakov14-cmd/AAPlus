@@ -369,7 +369,7 @@ def cmd_ratings(args, settings):
         if "raexpert" in sources:
             got += load_raexpert()
         if "acra" in sources:
-            got += load_acra_press(max_pages=args.pages if args.pages > 3 else 40)
+            got += load_acra_press(max_pages=args.pages if args.pages > 3 else 120)
         seen = {(r.subject, r.agency, r.kind, r.isin, r.date) for r in book.all}
         added = 0
         for r in got:
