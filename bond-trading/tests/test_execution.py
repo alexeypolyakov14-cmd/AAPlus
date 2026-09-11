@@ -84,14 +84,15 @@ def test_tinvest_broker_with_fake_transport(rows):
             if body["order_type"] == "ORDER_TYPE_LIMIT":
                 assert body["price"]["units"] == "53"
             return {"order_id": "ord-1", "execution_report_status": "EXECUTION_REPORT_STATUS_FILL", "lots_executed": 10,
-                    "executed_order_price": {"units": "53", "nano": 200000000}, "executed_commission": {"units": "3", "nano": 0}}
+                    "executed_order_price": {"units": "532", "nano": 0}, "executed_commission": {"units": "3", "nano": 0}}
         if method == "OperationsService/GetPositions":
             return {"money": [{"currency": "rub", "units": "100000", "nano": 500000000}, {"currency": "usd", "units": "5", "nano": 0}]}
         if method == "OperationsService/GetPortfolio":
-            return {"positions": [{"instrument_type": "bond", "instrument_uid": "uid-238", "quantity": {"units": "10", "nano": 0}},
+            return {"positions": [{"instrument_type": "bond", "instrument_uid": "uid-238", "quantity": {"units": "10", "nano": 0},
+                                   "average_position_price": {"units": "531", "nano": 500000000}},
                                   {"instrumentType": "share", "instrumentUid": "x", "quantity": {"units": "1", "nano": 0}}]}
         if method == "InstrumentsService/GetInstrumentBy":
-            return {"instrument": {"uid": "uid-238", "ticker": "SU26238RMFS4"}}
+            return {"instrument": {"uid": "uid-238", "ticker": "SU26238RMFS4", "nominal": {"units": "1000", "nano": 0, "currency": "rub"}}}
         if method == "OrdersService/GetOrders":
             return {"orders": [{"order_id": "o1"}]}
         if method == "OrdersService/CancelOrder":
@@ -110,6 +111,7 @@ def test_tinvest_broker_with_fake_transport(rows):
     assert rep.status == "filled" and rep.filled_qty == 10 and rep.fill_price == pytest.approx(53.2) and rep.commission == 3.0
     assert br.cash() == pytest.approx(100000.5)
     assert br.positions() == {"SU26238RMFS4": 10}
+    assert br.positions_detailed() == {"SU26238RMFS4": (10, pytest.approx(53.15))}   # рубли -> % от номинала
     assert br.cancel_all() == 1
     # лимитная цена: покупка по аску с запасом, продажа по биду; без стакана — последняя цена
     from bondtrader.models import Quote as _Q

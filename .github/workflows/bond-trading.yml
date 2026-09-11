@@ -169,9 +169,9 @@ jobs:
           restore-keys: |
             daily-books-
             credit-books-
-      - name: Рейтинги (обновление, накопительно)
+      - name: Рейтинги (обновление, накопительно; АКРА — только свежие пресс-релизы)
         continue-on-error: true
-        run: bondtrader ratings fetch 2>&1 | tail -3
+        run: bondtrader ratings fetch --pages 8 2>&1 | tail -3
       - name: Новости по эмитентам скрина
         continue-on-error: true
         run: bondtrader news fetch --from-screen --general 2>&1 | tail -5

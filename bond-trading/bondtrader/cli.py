@@ -190,11 +190,12 @@ def _broker_portfolio(broker, rows: list[ScreenRow], settings) -> Portfolio:
         return broker.portfolio
     pf = Portfolio(cash=broker.cash())
     by_id = {r.secid: r for r in rows}
-    for secid, qty in broker.positions().items():
+    detailed = broker.positions_detailed() if hasattr(broker, "positions_detailed") else {s: (q, None) for s, q in broker.positions().items()}
+    from .portfolio import Position
+    for secid, (qty, avg) in detailed.items():
         price = by_id[secid].metrics.clean_price if secid in by_id else 100.0
         face = by_id[secid].bond.face_value if secid in by_id else 1000.0
-        from .portfolio import Position
-        pf.positions[secid] = Position(secid, qty, price, face)
+        pf.positions[secid] = Position(secid, qty, avg if avg else price, face)
     return pf
 
 

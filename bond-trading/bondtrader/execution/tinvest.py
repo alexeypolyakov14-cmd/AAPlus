@@ -193,8 +193,12 @@ class TInvestBroker:
         return total
 
     def positions(self) -> dict[str, int]:
+        return {s: q for s, (q, _) in self.positions_detailed().items()}
+
+    def positions_detailed(self) -> dict[str, tuple[int, Optional[float]]]:
+        """secid -> (количество, средняя цена покупки в % от номинала или None)."""
         pf = self.call("OperationsService/GetPortfolio", {"account_id": self.account_id(), "currency": "RUB"})
-        out: dict[str, int] = {}
+        out: dict[str, tuple[int, Optional[float]]] = {}
         for p in pf.get("positions", []):
             if g(p, "instrument_type") != "bond":
                 continue
@@ -202,9 +206,21 @@ class TInvestBroker:
             inst = self._instrument_by_uid(uid) if uid else {}
             ticker = inst.get("ticker") or p.get("figi") or uid
             qty = int(round(from_quotation(p.get("quantity"))))
-            if qty:
-                out[ticker] = out.get(ticker, 0) + qty
+            if not qty:
+                continue
+            avg_rub = from_quotation(g(p, "average_position_price")) if g(p, "average_position_price") else 0.0
+            nominal = from_quotation(inst.get("nominal")) if isinstance(inst.get("nominal"), dict) else 0.0
+            avg_pct = self._to_pct(avg_rub, nominal) if avg_rub else None
+            prev_qty, prev_avg = out.get(ticker, (0, None))
+            out[ticker] = (prev_qty + qty, avg_pct if prev_avg is None else prev_avg)
         return out
+
+    @staticmethod
+    def _to_pct(price_rub: float, nominal: float) -> float:
+        """T-Invest отдаёт цены исполнения и средние цены по облигациям в рублях за бумагу; система работает в % от номинала."""
+        if nominal and nominal > 0:
+            return price_rub / nominal * 100
+        return price_rub / 10 if price_rub > 200 else price_rub   # без номинала: типовой номинал 1000
 
     def trading_status(self, uid: str) -> tuple[bool, str]:
         """(можно ли торговать через API сейчас, статус)."""
@@ -263,6 +279,9 @@ class TInvestBroker:
         status = order_status_text(g(r, "execution_report_status", default="") or "")
         filled_lots = int(g(r, "lots_executed", default=0) or 0)
         avg = from_quotation(g(r, "executed_order_price")) if g(r, "executed_order_price") else None
+        if avg:
+            nominal = from_quotation(inst.get("nominal")) if isinstance(inst.get("nominal"), dict) else bond.face_value
+            avg = self._to_pct(avg, nominal or bond.face_value)
         commission = from_quotation(g(r, "executed_commission")) if g(r, "executed_commission") else 0.0
         return OrderReport(order, status, broker_order_id=g(r, "order_id", default="") or "", filled_qty=filled_lots * lot,
                            fill_price=avg if avg else None, commission=commission, message=r.get("message", ""))
