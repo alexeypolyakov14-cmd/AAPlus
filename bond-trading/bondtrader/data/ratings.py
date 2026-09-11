@@ -92,6 +92,7 @@ class RatingsBook:
         self.by_isin: dict[str, list[Rating]] = {}
         self.by_emitter: dict[str, list[Rating]] = {}
         self.by_alias: list[tuple[str, Rating]] = []
+        self.by_subject: dict[str, list[Rating]] = {}
         self.all: list[Rating] = []
         for r in ratings:
             self.add(r)
@@ -104,6 +105,8 @@ class RatingsBook:
             self.by_emitter.setdefault(str(r.emitter_id), []).append(r)
         if r.alias:
             self.by_alias.append((_norm_name(r.alias), r))
+        if r.kind == "issuer" and r.subject:
+            self.by_subject.setdefault(r.subject, []).append(r)
 
     def __len__(self) -> int:
         return len(self.all)
@@ -119,6 +122,13 @@ class RatingsBook:
             # самый длинный псевдоним — самое точное совпадение
             best_len = max(len(_norm_name(r.alias)) for r in hits)
             return [r for r in hits if len(_norm_name(r.alias)) == best_len]
+        if bond.full_name:
+            out: list[Rating] = []
+            for subject, rs in self.by_subject.items():
+                if issuer_match(subject, bond.full_name):
+                    out.extend(rs)
+            if out:
+                return out
         return []
 
     def lookup(self, bond: Bond, emitter_id: Optional[str] = None) -> Optional[Rating]:
@@ -176,3 +186,31 @@ def parse_rating_row(row: dict) -> Optional[Rating]:
 
 def _norm_name(s: str) -> str:
     return re.sub(r"[^a-zа-я0-9]", "", (s or "").lower().replace("ё", "е"))
+
+
+_LEGAL_RE = re.compile(r"\b(ооо|ао|пао|зао|оао|нао|ип|мкао|мфк|мкк|гк|ук|ик|лк|фк|нко|общество с ограниченной ответственностью|"
+                       r"публичное акционерное общество|акционерное общество|закрытое акционерное общество|"
+                       r"limited|llc|plc|ltd|jsc|pjsc|ojsc|компани\w*|корпорац\w*|групп\w*|холдинг\w*|финанс\w*|инвест\w*|капитал\w*)\b")
+_STOP = {"бо", "бо-п", "серии", "серия", "выпуск", "выпуска", "облигаций", "облигации", "биржевых", "биржевые", "и"}
+
+
+def issuer_tokens(name: str) -> list[str]:
+    """Существенные слова названия эмитента без организационно-правовой формы и кавычек."""
+    s = (name or "").lower().replace("ё", "е")
+    s = re.sub(r"[«»\"'().,;:/\\-]", " ", s)
+    s = _LEGAL_RE.sub(" ", s)
+    toks = [t for t in re.split(r"\s+", s) if len(t) >= 3 and t not in _STOP and not re.search(r"[0-9]", t)]
+    return toks
+
+
+def issuer_match(subject: str, full_name: str) -> bool:
+    """Все существенные слова названия эмитента из рейтинга встречаются в полном имени выпуска MOEX."""
+    st = issuer_tokens(subject)
+    ft = set(issuer_tokens(full_name))
+    if not st or not ft:
+        return False
+    # допускаем усечения: «Балтийский лизинг» vs «Балт. лизинг» — сравниваем по префиксам из 5 букв
+    def key(t: str) -> str:
+        return t[:6]
+    fk = {key(t) for t in ft}
+    return all(key(t) in fk for t in st)

@@ -64,6 +64,7 @@ def parse_bond_row(row: dict) -> Bond:
     return Bond(
         secid=row.get("SECID", ""),
         name=row.get("SHORTNAME") or row.get("SECNAME") or "",
+        full_name=row.get("SECNAME") or "",
         isin=row.get("ISIN") or "",
         board=row.get("BOARDID") or "",
         face_value=face,

@@ -29,6 +29,7 @@ class Bond:
     name: str = ""
     isin: str = ""
     board: str = ""
+    full_name: str = ""                  # SECNAME MOEX: обычно содержит название эмитента
     face_value: float = 1000.0           # текущий (с учётом амортизации) номинал
     initial_face_value: float = 1000.0
     currency: str = "SUR"

@@ -352,6 +352,16 @@ def cmd_ratings(args, settings):
         from .data.ratings_web import discover
         discover(args.names)
         return
+    if args.action == "fetch":
+        from .data.ratings_web import load_nkr
+        path = settings.get("data", "ratings_csv", default="data/ratings.csv")
+        book = RatingsBook.from_csv(path)
+        before = len(book)
+        for r in load_nkr(pages=args.pages):
+            book.add(r)
+        book.to_csv(path)
+        print(f"НКР: добавлено {len(book) - before} записей, всего {len(book)} -> {path}")
+        return
     book = RatingsBook.from_csv(settings.get("data", "ratings_csv", default="data/ratings.csv"))
     if args.action == "show":
         snap = load_snapshot(settings, args.fixtures)
@@ -423,8 +433,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("bond", parents=[common], help="карточка облигации"); sp.add_argument("secid"); sp.add_argument("--schedule", action="store_true"); sp.set_defaults(fn=cmd_bond)
     sp = sub.add_parser("strategies", parents=[common], help="список стратегий"); sp.set_defaults(fn=cmd_strategies)
     sp = sub.add_parser("ratings", parents=[common], help="кредитные рейтинги: list | show SECID | coverage | discover")
-    sp.add_argument("action", choices=["list", "show", "coverage", "discover"]); sp.add_argument("secid", nargs="?")
-    sp.add_argument("--names", nargs="*", help="для discover: какие источники смотреть"); screen_opts(sp); sp.set_defaults(fn=cmd_ratings)
+    sp.add_argument("action", choices=["list", "show", "coverage", "discover", "fetch"]); sp.add_argument("secid", nargs="?")
+    sp.add_argument("--names", nargs="*", help="для discover: какие источники смотреть")
+    sp.add_argument("--pages", type=int, default=3, help="для fetch: сколько страниц пресс-релизов НКР"); screen_opts(sp); sp.set_defaults(fn=cmd_ratings)
     sp = sub.add_parser("signals", parents=[common], help="целевой портфель и ордера по стратегии"); screen_opts(sp); strat_opts(sp)
     sp.add_argument("--broker", choices=["paper", "tinvest"]); sp.add_argument("--csv"); sp.set_defaults(fn=cmd_signals)
     sp = sub.add_parser("trade", parents=[common], help="исполнить ребалансировку через брокера"); screen_opts(sp); strat_opts(sp)

@@ -61,6 +61,12 @@ jobs:
       - name: Разведка сайтов рейтинговых агентств (структура страниц)
         continue-on-error: true
         run: bondtrader ratings discover
+      - name: Рейтинги НКР -> data/ratings.csv, покрытие скрина
+        continue-on-error: true
+        run: |
+          bondtrader ratings fetch --pages 5
+          bondtrader ratings list | head -40
+          bondtrader ratings coverage | head -60
       - name: Сигналы стратегий
         run: |
           bondtrader signals -s carry

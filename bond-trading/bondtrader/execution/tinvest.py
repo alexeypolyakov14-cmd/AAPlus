@@ -77,7 +77,8 @@ class TInvestBroker:
         if not token and post is None:
             raise ValueError("не задан токен T-Invest API (переменная окружения TINVEST_TOKEN)")
         self.token = token
-        self.verify: str | bool = ca_bundle or os.environ.get("TINVEST_CA_BUNDLE") or True
+        from ..data.tls import ru_ca_bundle
+        self.verify: str | bool = ca_bundle or os.environ.get("TINVEST_CA_BUNDLE") or ru_ca_bundle() or True
         self.sandbox = sandbox
         self.base = SANDBOX_URL if sandbox else PROD_URL
         self.timeout = timeout

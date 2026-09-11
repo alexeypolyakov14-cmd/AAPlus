@@ -95,3 +95,31 @@ def test_parse_generic_table():
     rs = parse_generic_table(html, "Эксперт РА")
     assert [(r.subject, r.rating) for r in rs] == [("ООО «Пример»", "BBB+"), ("АО Тест", "A-"), ("Выпуск", "BB")]
     assert rs[0].date == date(2025, 3, 12) and rs[1].date == date(2025, 1, 5) and rs[2].isin == "RU000A10BJX9"
+
+
+def test_issuer_name_matching():
+    from bondtrader.data.ratings import issuer_match, issuer_tokens
+    assert issuer_tokens('ООО «Балтийский лизинг»') == ["балтийский", "лизинг"]
+    assert issuer_match("Балтийский лизинг", "Балтийский лизинг ООО БО-П16")
+    assert issuer_match('ПАО «Группа компаний «Самолет»', "ГК Самолет ПАО БО-П14")
+    assert not issuer_match("Самолет", "Сегежа Групп ПАО 003P-06R")
+    assert issuer_match("Сегежа Групп", "Сегежа Групп ПАО 003P-06R") and not issuer_match("Сегежа Групп", "ГК Самолет ПАО БО-П14")
+    assert not issuer_match("", "x")
+    book = RatingsBook([Rating("ООО «Балтийский лизинг»", "НКР", "AA-", kind="issuer")])
+    b = Bond(secid="RU000A10BJX9", name="БалтЛизП16", isin="RU000A10BJX9", full_name="Балтийский лизинг ООО БО-П16")
+    assert book.lookup(b).rating == "AA-"
+    assert book.lookup(Bond(secid="X", name="Другой", full_name="Другой эмитент АО 001P")) is None
+
+
+def test_parse_nkr_press():
+    from bondtrader.data.ratings_web import parse_nkr_press
+    html = """<table><tr><th>Название</th><th>Сектор</th><th>Дата</th></tr>
+    <tr><td><a href="/1">НКР присвоило АО «ЛОЭСК» кредитный рейтинг A.ru со стабильным прогнозом</a></td><td>Нефинансовые</td><td>10.09.2026</td></tr>
+    <tr><td>НКР снизило кредитный рейтинг ООО «Л-Старт» с B.ru до CCC.ru, прогноз — «рейтинг на пересмотре»</td><td>Нефинансовые</td><td>09.09.2026</td></tr>
+    <tr><td>НКР присвоило выпуску биржевых облигаций ООО «ЕвразХолдинг Финанс» серии 003P-07 кредитный рейтинг AA-.ru</td><td>Нефинансовые</td><td>08.09.2026</td></tr>
+    <tr><td>НКР отозвало кредитный рейтинг АО «Х» BB.ru</td><td>Нефинансовые</td><td>07.09.2026</td></tr>
+    <tr><td>НКР подтвердило кредитный рейтинг ПАО «ПИК-Корпорация» на уровне A+.ru</td><td>Нефинансовые</td><td>06.09.2026</td></tr></table>"""
+    rs = parse_nkr_press(html)
+    assert [(r.subject, r.rating, r.kind) for r in rs] == [
+        ("ЛОЭСК", "A", "issuer"), ("Л-Старт", "CCC", "issuer"), ("ЕвразХолдинг Финанс", "AA-", "issue"), ("ПИК-Корпорация", "A+", "issuer")]
+    assert rs[0].date == date(2026, 9, 10) and all(r.agency == "НКР" for r in rs)
