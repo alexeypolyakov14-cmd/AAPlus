@@ -197,7 +197,7 @@ class MoexClient:
         self._last_call = 0.0
 
     # --- низкоуровневый запрос ---
-    def fetch_json(self, path: str, params: Optional[dict] = None, ttl: float = 300, retries: int = 3) -> dict:
+    def fetch_json(self, path: str, params: Optional[dict] = None, ttl: float = 300, retries: int = 5) -> dict:
         params = dict(params or {})
         params.setdefault("iss.meta", "off")
         key = path + "?" + "&".join(f"{k}={v}" for k, v in sorted(params.items()))
@@ -218,8 +218,8 @@ class MoexClient:
                 return data
             except (requests.RequestException, ValueError) as e:
                 last_err = e
-                log.warning("MOEX %s: попытка %d/%d: %s", path, attempt + 1, retries, e)
-                time.sleep(1.5 * (attempt + 1))
+                log.warning("MOEX %s: попытка %d/%d: %s", path, attempt + 1, retries, str(e)[:160])
+                time.sleep(min(2 ** (attempt + 1), 20))  # 2, 4, 8, 16, 20 с
         raise RuntimeError(f"MOEX ISS недоступен: {path}: {last_err}")
 
     # --- справочники и котировки ---
