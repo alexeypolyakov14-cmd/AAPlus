@@ -128,6 +128,12 @@ jobs:
       - name: Проверка TLS до песочницы
         run: |
           echo | openssl s_client -connect sandbox-invest-public-api.tinkoff.ru:443 -servername sandbox-invest-public-api.tinkoff.ru -CAfile /tmp/ca-bundle.pem 2>/dev/null | grep -E "Verify return code|issuer=|subject=" || true
+      - name: Книга рейтингов (кэш)
+        uses: actions/cache/restore@v4
+        with:
+          path: bond-trading/data/ratings.csv
+          key: ratings-csv-none
+          restore-keys: ratings-csv-
       - name: Счёт песочницы
         run: bondtrader sandbox-init --amount 1000000
       - name: Портфель до

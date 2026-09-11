@@ -70,6 +70,15 @@ def discover_bundle(base: str = GIRBO_BASE, index_path: str = "/") -> list[str]:
     return sorted(paths)
 
 
+# Агрегаторы данных ФНС, доступные из-за рубежа (ГИР БО и e-disclosure геоблокированы/антибот)
+AGGREGATOR_CANDIDATES = {
+    "audit_it": "https://www.audit-it.ru/buh_otchet/{inn}",
+    "list_org_search": "https://www.list-org.com/search?type=inn&val={inn}",
+    "checko": "https://checko.ru/company/{inn}",
+    "rusprofile_search": "https://www.rusprofile.ru/search?query={inn}",
+    "smartlab_bonds": "https://smart-lab.ru/q/bonds/",
+}
+
 MOEX_DEFAULTS_CANDIDATES = [
     "https://www.moex.com/ru/listing/emitent-defaults.aspx",
     "https://www.moex.com/ru/listing/default.aspx",
@@ -96,6 +105,32 @@ def discover(query: str = "Балтийский лизинг") -> None:
             print(f"== girbo:{name} (Accept: json) {url}\n   HTTP {code} {ctype} len={len(text)}\n   head: " + re.sub(r"\s+", " ", text[:1200]))
         except Exception as e:  # noqa: BLE001
             print(f"== girbo:{name} (Accept: json) ERROR {e}")
+    inn = query if query.isdigit() else "7826705374"
+    for name, tpl in AGGREGATOR_CANDIDATES.items():
+        url = tpl.format(inn=inn)
+        try:
+            code, ctype, text = fetch(url)
+        except Exception as e:  # noqa: BLE001
+            print(f"== agg:{name} {url}\n   ERROR {e}")
+            continue
+        title = re.search(r"<title>(.*?)</title>", text, re.S | re.I)
+        print(f"== agg:{name} {url}\n   HTTP {code} {ctype} len={len(text)} title={title.group(1).strip()[:100] if title else '-'}")
+        body = re.sub(r"<script.*?</script>|<style.*?</style>", " ", text, flags=re.S | re.I)
+        body = re.sub(r"<[^>]+>", " ", body)
+        body = re.sub(r"\s+", " ", body)
+        for kw in ("Выручка", "1300", "Баланс", "2110", "Капитал"):
+            i = body.find(kw)
+            if i >= 0:
+                print(f"   near '{kw}': " + body[max(0, i - 300): i + 900])
+                break
+        else:
+            print("   text: " + body[:800])
+        tables = re.findall(r"<table.*?</table>", text, re.S | re.I)
+        print(f"   tables={len(tables)}")
+        for t in tables[:2]:
+            print("   table head: " + re.sub(r"\s+", " ", t)[:700])
+        links = sorted(set(re.findall(r'href="([^"]*(?:otchet|buh|finan|report)[^"]*)"', text, re.I)))[:15]
+        print(f"   links: {links}")
     for url in MOEX_DEFAULTS_CANDIDATES:
         try:
             code, ctype, text = fetch(url)
