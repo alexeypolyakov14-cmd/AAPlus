@@ -470,11 +470,12 @@ def cmd_report(args, settings):
 def cmd_notify(args, settings):
     from .notify import strip_markdown, telegram_send, telegram_whoami
     if args.whoami:
-        chats = telegram_whoami()
+        bot, chats = telegram_whoami()
+        print(f"Токен принадлежит боту @{bot} (https://t.me/{bot}).")
         if not chats:
-            print("Боту ещё никто не писал: откройте бота в Telegram, нажмите Start и отправьте любое сообщение, затем повторите.")
+            print("Этому боту ещё никто не писал: откройте именно его в Telegram, нажмите Start и отправьте любое сообщение, затем повторите.")
             return
-        print(f"Бот @{chats[0]['bot']}. Чаты, писавшие боту (значение для секрета TELEGRAM_CHAT_ID):")
+        print("Чаты, писавшие боту (значение для секрета TELEGRAM_CHAT_ID):")
         for c in chats:
             print(f"  chat_id={c['chat_id']}  {c['type']}  {c['name']}  «{c['last_text']}»")
         return

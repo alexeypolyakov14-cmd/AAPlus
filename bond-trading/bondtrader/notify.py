@@ -15,8 +15,8 @@ TG_ME = "https://api.telegram.org/bot{token}/getMe"
 CHUNK = 3900
 
 
-def telegram_whoami(token: Optional[str] = None, timeout: float = 20) -> list[dict]:
-    """Кто писал боту: [{chat_id, name, type, last_text}] — чтобы узнать TELEGRAM_CHAT_ID. Токен не печатается."""
+def telegram_whoami(token: Optional[str] = None, timeout: float = 20) -> tuple[str, list[dict]]:
+    """(username бота, кто писал боту: [{chat_id, name, type, last_text}]) — чтобы узнать TELEGRAM_CHAT_ID. Токен не печатается."""
     token = (token or os.environ.get("TELEGRAM_BOT_TOKEN", "")).strip()   # секрет часто вставляют с пробелом/переводом строки
     if not token:
         raise RuntimeError("не задан TELEGRAM_BOT_TOKEN")
@@ -36,10 +36,7 @@ def telegram_whoami(token: Optional[str] = None, timeout: float = 20) -> list[di
         name = chat.get("title") or " ".join(x for x in (chat.get("first_name"), chat.get("last_name")) if x) or chat.get("username") or ""
         chats[chat["id"]] = {"chat_id": chat["id"], "name": name, "type": chat.get("type", ""), "last_text": (msg.get("text") or "")[:40]}
     log.info("бот @%s, чатов: %d", bot, len(chats))
-    out = list(chats.values())
-    for c in out:
-        c["bot"] = bot
-    return out
+    return bot, list(chats.values())
 
 
 def telegram_send(text: str, token: Optional[str] = None, chat_id: Optional[str] = None, timeout: float = 20) -> int:
