@@ -483,8 +483,9 @@ def cmd_report(args, settings):
             with open(args.tg_file, "w", encoding="utf-8") as f:
                 f.write(html_text)
         if args.telegram:
+            from .bot import keyboard
             from .notify import telegram_send
-            n = telegram_send(html_text, parse_mode="HTML")
+            n = telegram_send(html_text, parse_mode="HTML", reply_markup=keyboard())
             print(f"отправлено в Telegram: {n} сообщ.", file=sys.stderr)
     print(md)
 
@@ -504,8 +505,30 @@ def cmd_notify(args, settings):
     text = open(args.file, encoding="utf-8").read() if args.file else (args.text or "")
     if not text.strip():
         raise SystemExit("нечего отправлять: --file или --text")
-    n = telegram_send(text, parse_mode="HTML") if args.html else telegram_send(strip_markdown(text))
+    markup = None
+    if args.menu:
+        from .bot import keyboard
+        markup = keyboard()
+    n = telegram_send(text, parse_mode="HTML", reply_markup=markup) if args.html else telegram_send(strip_markdown(text), reply_markup=markup)
     print(f"отправлено в Telegram: {n} сообщ.")
+
+
+def cmd_bot(args, settings):
+    """Кнопки в Telegram: обработать нажатия/команды (--once, для GitHub Actions) или крутиться в long polling (--poll)."""
+    from .bot import HELP, Bot, keyboard
+    from .notify import telegram_send
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    if not chat_id:
+        raise SystemExit("не задан TELEGRAM_CHAT_ID: бот отвечает только владельцу (см. notify --whoami)")
+    bot = Bot(lambda: collect_report(args, settings), chat_id, offset_path=args.offset_file, ttl=args.ttl)
+    if args.menu:
+        telegram_send(HELP, parse_mode="HTML", reply_markup=keyboard())
+        print("меню отправлено", file=sys.stderr)
+    if args.poll:
+        bot.run_forever(timeout=args.timeout, interval=args.interval)
+        return
+    n = bot.run_once()
+    print(f"обработано запросов: {n}")
 
 
 def cmd_backtest(args, settings):
@@ -1008,7 +1031,16 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(fn=cmd_report)
     sp = sub.add_parser("notify", parents=[common], help="отправить текст/файл в Telegram"); sp.add_argument("--file"); sp.add_argument("--text")
     sp.add_argument("--whoami", action="store_true", help="показать chat_id тех, кто писал боту (для секрета TELEGRAM_CHAT_ID)")
-    sp.add_argument("--html", action="store_true", help="файл уже в HTML-разметке Telegram (report --tg-file)"); sp.set_defaults(fn=cmd_notify)
+    sp.add_argument("--html", action="store_true", help="файл уже в HTML-разметке Telegram (report --tg-file)")
+    sp.add_argument("--menu", action="store_true", help="прикрепить к сообщению кнопки бота (отчёт/позиции/новости/скрин)"); sp.set_defaults(fn=cmd_notify)
+    sp = sub.add_parser("bot", parents=[common], help="Telegram-бот с кнопками: ответить на запросы (--once) или long polling (--poll)"); screen_opts(sp); strat_opts(sp)
+    sp.add_argument("--broker", choices=["paper", "tinvest"]); sp.add_argument("--live", action="store_true")
+    sp.add_argument("--poll", action="store_true", help="крутиться постоянно (локальный запуск); иначе обработать накопившееся и выйти")
+    sp.add_argument("--menu", action="store_true", help="сначала отправить справку с кнопками")
+    sp.add_argument("--offset-file", default="state/telegram_offset.json", help="где хранить update_id последнего обработанного обновления")
+    sp.add_argument("--ttl", type=float, default=900, help="сек., сколько держать собранные рынок/портфель между ответами (--poll)")
+    sp.add_argument("--timeout", type=int, default=25, help="сек. long polling (--poll)"); sp.add_argument("--interval", type=float, default=1.0)
+    sp.set_defaults(fn=cmd_bot)
     sp = sub.add_parser("portfolio", parents=[common], help="состояние портфеля и риск-метрики"); screen_opts(sp)
     sp.add_argument("--broker", choices=["paper", "tinvest"]); sp.set_defaults(fn=cmd_portfolio)
     sp = sub.add_parser("backtest", parents=[common], help="бэктест стратегии на истории MOEX"); screen_opts(sp); strat_opts(sp)

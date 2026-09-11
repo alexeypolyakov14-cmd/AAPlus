@@ -40,18 +40,9 @@ def _pnl(x: float) -> str:
     return f"{sign}{x:.0f}"
 
 
-def render_telegram(d: dict) -> str:
-    from .monitor import worst_level
-    snap, pf, broker, name = d["snap"], d["pf"], d["broker"], d["name"]
-    alerts, all_rows, pr, w = d["alerts"], d["all_rows"], d["pr"], d["weights"]
-    targets, orders, reasons, by_id, notes = d["targets"], d["orders"], d["reasons"], d["by_id"], d["notes"]
-    lvl = worst_level(alerts)
-    badge = {"critical": "🔴", "warning": "🟡", "info": "🟢", None: "🟢"}[lvl]
-    acct = "песочница" if getattr(broker, "sandbox", False) else ("бумажный" if broker.name == "paper" else "боевой счёт")
-    kr = f"{snap.keyrate.current:.1f}%" if snap.keyrate else "н/д"
-    cv = f"{snap.curve.yield_at(1):.1f} / {snap.curve.yield_at(3):.1f} / {snap.curve.yield_at(10):.1f}%" if snap.curve else "н/д"
-
-    # --- P&L по позициям (нереализованный, по чистой цене от средней покупки) ---
+def _positions(d: dict) -> tuple[list, float]:
+    """[(secid, row|None, pos, вес, pnl)], нереализованный P&L по чистой цене от средней покупки."""
+    pf, all_rows, w = d["pf"], d["all_rows"], d["weights"]
     unreal = 0.0
     pos_rows = []
     for secid, pos in pf.positions.items():
@@ -63,43 +54,59 @@ def render_telegram(d: dict) -> str:
         unreal += pnl
         pos_rows.append((secid, r, pos, w.get(secid, 0.0), pnl))
     pos_rows.sort(key=lambda t: -t[3])
+    return pos_rows, unreal
 
-    S: list[str] = []
-    S.append(f"{badge} <b>bondtrader · {snap.settle:%d.%m.%Y}</b> · {_e(name)} · {acct}")
-    S.append(f"Ключевая {kr} · ОФЗ 1/3/10 лет {cv}")
-    S.append("")
-    S.append("<b>Портфель</b>")
-    S.append(f"NAV <b>{pr.nav:,.0f} ₽</b> · деньги {_money(pf.cash)} ({pr.cash_share:.0%}) · позиций {len(pf.positions)}")
-    S.append(f"P&amp;L нереализ. <b>{_pnl(unreal)} ₽</b> · реализ. {_pnl(pf.realized_pnl)} · купоны {_pnl(pf.coupons_received)} · комиссии {pf.commissions_paid:,.0f}")
-    S.append(f"Дюрация {pr.duration:.2f} · DV01 {pr.dv01:,.0f} ₽/б.п. · VaR 1д {_money(pr.var_1d_95)} · корпораты {pr.corporate_share:.0%}")
-    S.append("")
 
-    # --- алерты ---
+def section_header(d: dict) -> list[str]:
+    from .monitor import worst_level
+    snap, broker, name, alerts = d["snap"], d["broker"], d["name"], d["alerts"]
+    badge = {"critical": "🔴", "warning": "🟡", "info": "🟢", None: "🟢"}[worst_level(alerts)]
+    acct = "песочница" if getattr(broker, "sandbox", False) else ("бумажный" if broker.name == "paper" else "боевой счёт")
+    kr = f"{snap.keyrate.current:.1f}%" if snap.keyrate else "н/д"
+    cv = f"{snap.curve.yield_at(1):.1f} / {snap.curve.yield_at(3):.1f} / {snap.curve.yield_at(10):.1f}%" if snap.curve else "н/д"
+    return [f"{badge} <b>bondtrader · {snap.settle:%d.%m.%Y}</b> · {_e(name)} · {acct}", f"Ключевая {kr} · ОФЗ 1/3/10 лет {cv}"]
+
+
+def section_portfolio(d: dict) -> list[str]:
+    pf, pr = d["pf"], d["pr"]
+    _, unreal = _positions(d)
+    return ["<b>Портфель</b>",
+            f"NAV <b>{pr.nav:,.0f} ₽</b> · деньги {_money(pf.cash)} ({pr.cash_share:.0%}) · позиций {len(pf.positions)}",
+            f"P&amp;L нереализ. <b>{_pnl(unreal)} ₽</b> · реализ. {_pnl(pf.realized_pnl)} · купоны {_pnl(pf.coupons_received)} · комиссии {pf.commissions_paid:,.0f}",
+            f"Дюрация {pr.duration:.2f} · DV01 {pr.dv01:,.0f} ₽/б.п. · VaR 1д {_money(pr.var_1d_95)} · корпораты {pr.corporate_share:.0%}"]
+
+
+def section_alerts(d: dict, limit: int = 12) -> list[str]:
+    alerts, all_rows = d["alerts"], d["all_rows"]
     icon = {"critical": "🔴", "warning": "🟡", "info": "ℹ️"}
-    S.append(f"<b>Алерты</b> ({len(alerts)})")
-    if alerts:
-        for a in alerts[:12]:
-            who = f"<b>{_e(_label(all_rows, a.secid))}</b>: " if a.secid else ""
-            S.append(f"{icon.get(a.level, '•')} {who}{_e(a.message[:140])}")
-        if len(alerts) > 12:
-            S.append(f"… ещё {len(alerts) - 12}")
-    else:
-        S.append("✅ всё спокойно")
-    S.append("")
+    S = [f"<b>Алерты</b> ({len(alerts)})"]
+    if not alerts:
+        return S + ["✅ всё спокойно"]
+    for a in alerts[:limit]:
+        who = f"<b>{_e(_label(all_rows, a.secid))}</b>: " if a.secid else ""
+        S.append(f"{icon.get(a.level, '•')} {who}{_e(a.message[:140])}")
+    if len(alerts) > limit:
+        S.append(f"… ещё {len(alerts) - limit}")
+    return S
 
-    # --- позиции: таблица ---
-    if pos_rows:
-        S.append(f"<b>Позиции</b> (вес · YTW · цена · P&amp;L)")
-        lines = ["Бумага       Вес  YTW  Цена   P&L"]
-        for secid, r, pos, wt, pnl in pos_rows:
-            if r is None:
-                lines.append(f"{_name(secid)} {'—':>4} {'—':>4} {'—':>6} {'—':>6}")
-                continue
-            lines.append(f"{_name(r.bond.name)}{wt * 100:4.1f} {r.metrics.yield_worst:4.1f} {r.metrics.clean_price:6.2f} {_pnl(pnl):>6}")
-        S.append("<pre>" + _e("\n".join(lines)) + "</pre>")
-        S.append("")
 
-    # --- цель и ордера ---
+def section_positions(d: dict) -> list[str]:
+    pos_rows, unreal = _positions(d)
+    if not pos_rows:
+        return ["<b>Позиции</b>: нет"]
+    lines = ["Бумага       Вес  YTW  Цена   P&L"]
+    for secid, r, pos, wt, pnl in pos_rows:
+        if r is None:
+            lines.append(f"{_name(secid)} {'—':>4} {'—':>4} {'—':>6} {'—':>6}")
+            continue
+        lines.append(f"{_name(r.bond.name)}{wt * 100:4.1f} {r.metrics.yield_worst:4.1f} {r.metrics.clean_price:6.2f} {_pnl(pnl):>6}")
+    lines.append(f"{'Итого P&L':<30}{_pnl(unreal):>6}")
+    return [f"<b>Позиции</b> ({len(pos_rows)}; вес % · YTW % · цена · P&amp;L ₽)", "<pre>" + _e("\n".join(lines)) + "</pre>"]
+
+
+def section_target(d: dict) -> list[str]:
+    name, targets, orders, all_rows, by_id, notes = d["name"], d["targets"], d["orders"], d["all_rows"], d["by_id"], d["notes"]
+    S: list[str] = []
     inv = sum(targets.values())
     buys = [o for o in orders if o.side == "BUY"]
     sells = [o for o in orders if o.side == "SELL"]
@@ -122,9 +129,12 @@ def render_telegram(d: dict) -> str:
         S.append("<pre>" + _e("\n".join(lines)) + "</pre>")
     else:
         S.append("Ребалансировка не требуется")
-    S.append("")
+    return S
 
-    # --- новости по позициям и целям за 7 дней ---
+
+def section_news(d: dict, days: int = 7, limit: int = 12) -> list[str]:
+    snap, pf, targets, all_rows, by_id = d["snap"], d["pf"], d["targets"], d["all_rows"], d["by_id"]
+    S: list[str] = []
     if snap.news is not None:
         watch = list(pf.positions) + [s for s in targets if s not in pf.positions]
         items = []
@@ -134,7 +144,7 @@ def render_telegram(d: dict) -> str:
             if r is None or r.news is None:
                 continue
             for it in r.news.items:
-                if (snap.settle - it.date).days > 7 or "blog" in it.tags or it.score == 0:
+                if (snap.settle - it.date).days > days or "blog" in it.tags or it.score == 0:
                     continue
                 key = it.title.lower()[:60]
                 if key in seen:
@@ -143,23 +153,56 @@ def render_telegram(d: dict) -> str:
                 items.append((it.score, it.date, r.bond.name, it))
         items.sort(key=lambda t: (t[0], -t[1].toordinal()))
         if items:
-            S.append("<b>Новости по позициям за 7 дней</b>")
-            for sc, dt, nm, it in items[:12]:
+            S.append(f"<b>Новости по позициям за {days} дней</b>")
+            for sc, dt, nm, it in items[:limit]:
                 mark = "🔻" if sc <= -3 else ("▫️" if sc < 0 else "🔹")
                 title = _e(it.title[:90])
                 link = f'<a href="{_e(it.url)}">{title}</a>' if it.url.startswith("http") else title
                 S.append(f"{mark} {dt:%d.%m} <b>{_e(nm)}</b> ({sc:+.1f}): {link}")
-            if len(items) > 12:
-                S.append(f"… ещё {len(items) - 12} в полном отчёте")
+            if len(items) > limit:
+                S.append(f"… ещё {len(items) - limit}")
         else:
-            S.append("<b>Новости</b>: значимых новостей по позициям за 7 дней нет")
-        S.append("")
+            S.append(f"<b>Новости</b>: значимых новостей по позициям за {days} дней нет")
+    else:
+        S.append("<b>Новости</b>: книга новостей пуста")
+    return S
 
-    # --- стоп-факторы скринера (кратко) ---
+
+def section_stops(d: dict) -> list[str]:
+    snap = d["snap"]
     stops = [(s, why) for s, why in (snap.rejected or {}).items() if any(m in why.lower() for m in ("дефолт", "default", "новости:"))]
-    if stops:
-        S.append(f"<b>Отсеяно по стоп-факторам</b>: {len(stops)} бумаг (дефолты MOEX, новости о дефолте/банкротстве)")
-    return "\n".join(S).strip()
+    return [f"<b>Отсеяно по стоп-факторам</b>: {len(stops)} бумаг (дефолты MOEX, новости о дефолте/банкротстве)"] if stops else []
+
+
+def section_screen(d: dict, limit: int = 15) -> list[str]:
+    """Топ кандидатов value_hy: композит и его разложение — «за что платят больше и почему»."""
+    targets, by_id, reasons, name = d["targets"], d["by_id"], d["reasons"], d["name"]
+    if not targets:
+        return [f"<b>Скрин {_e(name)}</b>: кандидатов нет"]
+    lines = ["Бумага      Рейт  YTW Спред Комп"]
+    picks = sorted(targets.items(), key=lambda kv: -kv[1])
+    for secid, wt in picks[:limit]:
+        r = by_id.get(secid)
+        if r is None or r.bond.is_ofz:
+            continue
+        rating = r.rating.rating if r.rating else "—"
+        comp = ""
+        why = reasons.get(secid, "")
+        if "композит" in why:
+            try:
+                comp = why.split("композит")[1].split(":")[0].strip()
+            except IndexError:
+                comp = ""
+        gs = r.metrics.g_spread or 0
+        lines.append(f"{_name(r.bond.name, 11)} {rating:>4} {r.metrics.yield_worst:4.1f} {gs:5.0f} {comp:>5}")
+    return [f"<b>Скрин {_e(name)}</b>: {len(targets)} бумаг в цели, инвестировано {sum(targets.values()):.0%}",
+            "<pre>" + _e("\n".join(lines)) + "</pre>",
+            "Комп — композит: остаток спреда к справедливому + отчётность vs рейтинг + доходность за вычетом PD·LGD + новости."]
+
+
+def render_telegram(d: dict) -> str:
+    parts = [section_header(d), section_portfolio(d), section_alerts(d), section_positions(d), section_target(d), section_news(d), section_stops(d)]
+    return "\n\n".join("\n".join(p) for p in parts if p).strip()
 
 
 def _label(all_rows: dict, secid: str) -> str:

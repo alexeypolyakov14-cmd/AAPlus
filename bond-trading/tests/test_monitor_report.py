@@ -94,3 +94,116 @@ risk:
     from bondtrader.notify import _split
     parts = _split(tg, limit=600)
     assert all(len(p) <= 600 for p in parts) and all(p.count("<pre>") == p.count("</pre>") for p in parts)
+
+
+def _report_data(tmp_path):
+    """Данные отчёта на фикстурах (бумажный портфель с одной позицией) — для рендеров бота."""
+    from bondtrader.cli import build_parser, collect_report
+    from bondtrader.config import Settings
+    cfg = tmp_path / "c.yaml"
+    (tmp_path / "data").mkdir(exist_ok=True)
+    (tmp_path / "data" / "news.csv").write_text(
+        "date,query,inn,source,title,url,score,tags\n2025-06-01,ВИС Ф БП04,,google:Интерфакс,ВИС Финанс допустила дефолт по купону,https://x/1,-4,default\n", encoding="utf-8")
+    cfg.write_text(f"""
+data:
+  news_csv: {tmp_path / 'data' / 'news.csv'}
+  ratings_csv: ''
+execution:
+  broker: paper
+  state_path: {tmp_path / 'pf.json'}
+  journal_path: {tmp_path / 'o.jsonl'}
+backtest:
+  initial_cash: 2000000
+""", encoding="utf-8")
+    (tmp_path / "pf.json").write_text(json.dumps({"cash": 1000000, "positions": {"RU000A103WV8": {"secid": "RU000A103WV8", "qty": 100, "avg_price": 95.0, "face": 1000}},
+                                                    "realized_pnl": 0, "coupons_received": 0, "commissions_paid": 0}), encoding="utf-8")
+    args = build_parser().parse_args(["-c", str(cfg), "--fixtures", FIX, "bot", "-s", "carry"])
+    return collect_report(args, Settings.load(str(cfg)))
+
+
+def test_bot_parse_and_render(tmp_path):
+    from bondtrader.bot import HELP, keyboard, parse_update, render
+    kb = keyboard()["inline_keyboard"]
+    assert [b["callback_data"] for row in kb for b in row] == ["report", "positions", "news", "screen", "alerts"]
+    assert parse_update({"update_id": 1, "message": {"chat": {"id": 42}, "text": "/positions@LTT_bot"}}) == ("42", "positions", None)
+    assert parse_update({"update_id": 2, "message": {"chat": {"id": 42}, "text": "привет"}}) is None
+    assert parse_update({"update_id": 3, "callback_query": {"id": "cq1", "data": "news", "message": {"chat": {"id": 42}}}}) == ("42", "news", "cq1")
+    assert parse_update({"update_id": 4, "callback_query": {"id": "cq2", "data": "rm -rf", "message": {"chat": {"id": 42}}}}) == ("42", "help", "cq2")
+    assert parse_update({"update_id": 5, "my_chat_member": {}}) is None
+    d = _report_data(tmp_path)
+    assert render("help", None) == HELP and render("menu", None)
+    full = render("report", d)
+    pos = render("positions", d)
+    news = render("news", d)
+    screen = render("screen", d)
+    alerts = render("alerts", d)
+    assert full.startswith("🔴 <b>bondtrader") and "<b>Цель carry</b>" in full
+    assert "<b>Позиции</b>" in pos and "Итого P&amp;L" in pos and "Цель" not in pos
+    assert "Новости по позициям" in news and 'href="https://x/1"' in news and "дефолт" in news
+    assert "<b>Скрин carry</b>" in screen and "<pre>" in screen
+    assert "<b>Алерты</b>" in alerts and "🔴" in alerts
+    assert "Не знаю" in render("wat", d)
+
+
+def test_bot_run_once_with_fake_api(tmp_path, monkeypatch):
+    """Полный цикл: getUpdates -> ответ владельцу с клавиатурой, чужой чат — «доступ закрыт», offset сохраняется."""
+    from bondtrader import bot as botmod
+    from bondtrader import notify
+    calls = []
+    updates = [
+        {"update_id": 10, "message": {"chat": {"id": 42}, "text": "/start"}},
+        {"update_id": 11, "callback_query": {"id": "cq", "data": "positions", "message": {"chat": {"id": 42}}}},
+        {"update_id": 12, "message": {"chat": {"id": 99}, "text": "/report"}},
+        {"update_id": 13, "message": {"chat": {"id": 42}, "text": "просто текст"}},
+    ]
+
+    class Resp:
+        status_code = 200
+        text = "ok"
+
+        def __init__(self, result):
+            self._r = result
+
+        def json(self):
+            return {"ok": True, "result": self._r}
+
+    def fake_post(url, json=None, timeout=None):
+        method = url.rsplit("/", 1)[1]
+        calls.append((method, json))
+        if method == "getUpdates":
+            assert json.get("offset") == 5 and "timeout" not in json
+            return Resp(updates)
+        return Resp({"message_id": len(calls)})
+
+    monkeypatch.setattr(notify.requests, "post", fake_post)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    d = _report_data(tmp_path)
+    collected = []
+
+    def collect():
+        collected.append(1)
+        return d
+
+    off = tmp_path / "state" / "off.json"
+    botmod.OffsetStore(str(off)).save(5)
+    b = botmod.Bot(collect, "42", offset_path=str(off))
+    assert b.run_once() == 2                      # /start и кнопка; чужой чат и обычный текст — не в счёт
+    assert len(collected) == 1                    # данные собраны один раз, только по кнопке
+    assert botmod.OffsetStore(str(off)).load() == 14
+    methods = [m for m, _ in calls]
+    assert methods.count("answerCallbackQuery") == 1
+    sent = [j for m, j in calls if m == "sendMessage"]
+    assert sent[0]["chat_id"] == "42" and "bondtrader" in sent[0]["text"] and "inline_keyboard" in sent[0]["reply_markup"]
+    assert any(j["chat_id"] == "42" and "<b>Позиции</b>" in j["text"] for j in sent)
+    assert any(j["chat_id"] == "99" and j["text"] == "Доступ закрыт." for j in sent)
+    assert not any(j["chat_id"] == "99" and "Позиции" in j["text"] for j in sent)
+
+
+def test_bot_cli_requires_chat_id(monkeypatch):
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    try:
+        main(["--fixtures", FIX, "bot"])
+    except SystemExit as e:
+        assert "TELEGRAM_CHAT_ID" in str(e)
+    else:
+        raise AssertionError("ожидался SystemExit")

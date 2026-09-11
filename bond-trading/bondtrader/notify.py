@@ -10,10 +10,30 @@ import requests
 
 log = logging.getLogger(__name__)
 
+TG_BASE = "https://api.telegram.org/bot{token}/{method}"
 TG_API = "https://api.telegram.org/bot{token}/sendMessage"
 TG_UPDATES = "https://api.telegram.org/bot{token}/getUpdates"
 TG_ME = "https://api.telegram.org/bot{token}/getMe"
 CHUNK = 3900
+
+
+def tg_token(token: Optional[str] = None) -> str:
+    token = (token or os.environ.get("TELEGRAM_BOT_TOKEN", "")).strip()   # секрет часто вставляют с пробелом/переводом строки
+    if not token:
+        raise RuntimeError("не задан TELEGRAM_BOT_TOKEN")
+    return token
+
+
+def tg_call(method: str, token: Optional[str] = None, timeout: float = 20, **body) -> dict:
+    """Вызов метода Bot API; возвращает result. Ошибка API — RuntimeError с описанием (токен в текст не попадает)."""
+    r = requests.post(TG_BASE.format(token=tg_token(token), method=method), json=body, timeout=timeout)
+    try:
+        data = r.json()
+    except ValueError:
+        raise RuntimeError(f"Telegram {method}: HTTP {r.status_code} {r.text[:200]}")
+    if not data.get("ok"):
+        raise RuntimeError(f"Telegram {method}: {data.get('description', r.text[:200])}")
+    return data.get("result")
 
 
 def telegram_whoami(token: Optional[str] = None, timeout: float = 20) -> tuple[str, list[dict]]:
@@ -41,8 +61,9 @@ def telegram_whoami(token: Optional[str] = None, timeout: float = 20) -> tuple[s
 
 
 def telegram_send(text: str, token: Optional[str] = None, chat_id: Optional[str] = None, timeout: float = 20,
-                  parse_mode: Optional[str] = None) -> int:
-    """Отправляет текст (при необходимости — несколькими сообщениями). Возвращает число отправленных сообщений."""
+                  parse_mode: Optional[str] = None, reply_markup: Optional[dict] = None) -> int:
+    """Отправляет текст (при необходимости — несколькими сообщениями). Возвращает число отправленных сообщений.
+    reply_markup (inline-клавиатура) прикрепляется к последнему сообщению."""
     token = (token or os.environ.get("TELEGRAM_BOT_TOKEN", "")).strip()
     chat_id = (chat_id or os.environ.get("TELEGRAM_CHAT_ID", "")).strip()
     if not token or not chat_id:
@@ -52,6 +73,8 @@ def telegram_send(text: str, token: Optional[str] = None, chat_id: Optional[str]
         body = {"chat_id": chat_id, "text": part, "disable_web_page_preview": True}
         if parse_mode:
             body["parse_mode"] = parse_mode
+        if reply_markup and i == len(parts):
+            body["reply_markup"] = reply_markup
         r = requests.post(TG_API.format(token=token), json=body, timeout=timeout)
         if r.status_code != 200 and parse_mode:
             # разметка не прошла валидацию Telegram — отправляем как есть, без форматирования

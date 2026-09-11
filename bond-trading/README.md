@@ -69,6 +69,23 @@ bondtrader trade -s carry --broker tinvest --confirm
 bondtrader portfolio --broker tinvest
 ```
 
+### Telegram: ежедневный отчёт и бот с кнопками
+
+Секреты (GitHub → Settings → Secrets and variables → Actions или переменные окружения локально): `TELEGRAM_BOT_TOKEN`
+(токен от @BotFather), `TELEGRAM_CHAT_ID` (ваш чат; узнать: напишите боту `/start`, затем `bondtrader notify --whoami`).
+
+```bash
+bondtrader report --broker tinvest --telegram      # отчёт в чат: HTML-таблицы позиций/P&L, алерты, цель, новости + кнопки
+bondtrader bot --menu                              # прислать справку с кнопками и ответить на накопившиеся запросы
+bondtrader bot --broker tinvest --poll             # локально: long polling, ответы мгновенно
+```
+
+Кнопки «📊 Отчёт», «📋 Позиции», «📰 Новости», «🔎 Скрин ВДО», «🚨 Алерты» (и команды `/report`, `/positions`, `/news`,
+`/screen`, `/alerts`, `/menu`). Бот отвечает только чату `TELEGRAM_CHAT_ID`. В GitHub Actions job `bot` запускается по
+расписанию каждые 10 минут в 09:00–19:59 МСК по будням и обрабатывает накопившиеся нажатия (`bot` без `--poll`: ответ
+приходит в течение 3–15 минут); смещение `state/telegram_offset.json` хранится в кэше Actions, чтобы не отвечать дважды.
+Ежедневный отчёт (10:40 МСК) приходит с теми же кнопками.
+
 Параметры стратегий передаются через `-p key=value` (числа, `true/false`, списки `[1,2,3]`) и перекрывают `strategy.params` из `config.yaml`.
 
 ## Стратегии
@@ -134,6 +151,10 @@ bond-trading/
 │   ├── portfolio.py         # позиции, сделки, купоны, NAV
 │   ├── risk.py              # лимиты, DV01, VaR, ордера из целевых весов
 │   ├── cli.py
+│   ├── monitor.py           # алерты по позициям (стоп-факторы, просадки, новости)
+│   ├── report_tg.py         # секции отчёта для Telegram (HTML, <pre>-таблицы)
+│   ├── notify.py            # Telegram Bot API: sendMessage, getUpdates, клавиатуры
+│   ├── bot.py               # кнопки/команды бота: отчёт, позиции, новости, скрин, алерты
 │   ├── analytics/           # bond_math.py, curve.py, fair_spread.py
 │   ├── data/                # moex.py, cbr.py, cache.py, tls.py, ratings.py, ratings_web.py, financials.py, girbo.py, disclosure.py, news.py, sectors.py
 │   ├── strategies/          # base.py, ladder.py, spread.py, rate_cycle.py, carry.py, value_hy.py

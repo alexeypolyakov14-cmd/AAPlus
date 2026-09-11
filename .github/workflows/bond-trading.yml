@@ -5,7 +5,8 @@ on:
     branches: ["**"]
     paths: ["bond-trading/**", ".github/workflows/bond-trading.yml"]
   schedule:
-    - cron: "40 7 * * 1-5"   # 10:40 МСК по будням: рынок открыт с 09:50, новости и рейтинги свежие
+    - cron: "40 7 * * 1-5"        # 10:40 МСК по будням: ежедневный отчёт (рынок открыт с 09:50, новости и рейтинги свежие)
+    - cron: "*/10 6-16 * * 1-5"   # каждые 10 минут 09:00–19:59 МСК по будням: ответы бота на кнопки/команды
   workflow_dispatch:
     inputs:
       daily:
@@ -14,6 +15,14 @@ on:
         default: false
       telegram_setup:
         description: "Только показать chat_id тех, кто писал боту (для секрета TELEGRAM_CHAT_ID)"
+        type: boolean
+        default: false
+      bot:
+        description: "Бот: ответить на накопившиеся нажатия кнопок/команды сейчас"
+        type: boolean
+        default: false
+      bot_menu:
+        description: "Бот: дополнительно прислать справку с кнопками"
         type: boolean
         default: false
       strategy:
@@ -43,6 +52,7 @@ jobs:
   test:
     name: Тесты (офлайн, фикстуры)
     runs-on: ubuntu-latest
+    if: github.event_name != 'schedule' || github.event.schedule == '40 7 * * 1-5'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -57,6 +67,7 @@ jobs:
     name: Живой прогон MOEX + ЦБ
     runs-on: ubuntu-latest
     needs: test
+    if: github.event_name != 'schedule' || github.event.schedule == '40 7 * * 1-5'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -157,7 +168,7 @@ jobs:
   daily:
     name: Ежедневный отчёт (расписание 10:40 МСК; профиль hy)
     runs-on: ubuntu-latest
-    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.daily)
+    if: (github.event_name == 'schedule' && github.event.schedule == '40 7 * * 1-5') || (github.event_name == 'workflow_dispatch' && inputs.daily)
     env:
       TINVEST_TOKEN: ${{ secrets.TINVEST_TOKEN }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -212,7 +223,7 @@ jobs:
       - name: Telegram
         if: env.TELEGRAM_BOT_TOKEN != '' && env.TELEGRAM_CHAT_ID != ''
         continue-on-error: true
-        run: bondtrader notify --file report_tg.html --html
+        run: bondtrader notify --file report_tg.html --html --menu
       - uses: actions/upload-artifact@v4
         with:
           name: daily-report
@@ -222,10 +233,67 @@ jobs:
             bond-trading/data/ratings.csv
           if-no-files-found: ignore
 
+  bot:
+    name: Telegram-бот — ответы на кнопки (каждые 10 минут в торговые часы)
+    runs-on: ubuntu-latest
+    if: (github.event_name == 'schedule' && github.event.schedule == '*/10 6-16 * * 1-5') || (github.event_name == 'workflow_dispatch' && inputs.bot)
+    concurrency: telegram-bot
+    env:
+      TINVEST_TOKEN: ${{ secrets.TINVEST_TOKEN }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      BONDTRADER_CONFIG: configs/hy.yaml
+    steps:
+      - uses: actions/checkout@v4
+      - name: Проверка секретов
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then echo "::error::нужны секреты TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID"; exit 1; fi
+      - name: Смещение обновлений Telegram (кэш) — чтобы не отвечать дважды
+        uses: actions/cache@v4
+        with:
+          path: bond-trading/state/telegram_offset.json
+          key: tg-offset-${{ github.run_id }}
+          restore-keys: tg-offset-
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: bond-trading/requirements.txt
+      - run: pip install -e .
+      - name: Сертификаты УЦ Минцифры (T-Invest)
+        if: env.TINVEST_TOKEN != ''
+        run: |
+          set -e
+          cp "$(python -m certifi)" /tmp/ca-bundle.pem
+          for name in russian_trusted_root_ca russian_trusted_sub_ca; do
+            curl -sSfLo /tmp/$name.raw "https://gu-st.ru/content/lending/${name}_pem.crt"
+            if grep -q "BEGIN CERTIFICATE" /tmp/$name.raw; then openssl x509 -in /tmp/$name.raw -inform PEM -out /tmp/$name.pem; else openssl x509 -in /tmp/$name.raw -inform DER -out /tmp/$name.pem; fi
+            printf '\n' >> /tmp/ca-bundle.pem; cat /tmp/$name.pem >> /tmp/ca-bundle.pem
+          done
+          echo "TINVEST_CA_BUNDLE=/tmp/ca-bundle.pem" >> "$GITHUB_ENV"
+      - name: Книги (кэш) — рейтинги, новости, отчётность, факты
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            bond-trading/data/ratings.csv
+            bond-trading/data/news.csv
+            bond-trading/data/financials.csv
+            bond-trading/data/issuers.csv
+            bond-trading/data/disclosure.csv
+          key: daily-books-none
+          restore-keys: |
+            daily-books-
+            credit-books-
+      - name: Ответить на накопившиеся нажатия и команды
+        run: |
+          if [ -n "$TINVEST_TOKEN" ]; then BR="--broker tinvest"; else BR=""; fi
+          MENU=""; if [ "${{ inputs.bot_menu }}" = "true" ]; then MENU="--menu"; fi
+          bondtrader bot $BR $MENU
+
   sandbox:
     name: Песочница T-Invest (ручной запуск, нужен секрет TINVEST_TOKEN)
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && !inputs.bot && !inputs.telegram_setup
     env:
       TINVEST_TOKEN: ${{ secrets.TINVEST_TOKEN }}
       BONDTRADER_CONFIG: ${{ inputs.profile == 'default' && 'config.yaml' || format('configs/{0}.yaml', inputs.profile) }}
