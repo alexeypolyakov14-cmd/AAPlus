@@ -50,7 +50,9 @@ def test_notify_helpers():
     md = "# Заголовок\n**жирный** и `код`\n```\nblock\n```\nстрока"
     assert strip_markdown(md) == "Заголовок\nжирный и код\nстрока"
     parts = _split("a\n" * 10, limit=5)
-    assert all(len(p) <= 5 for p in parts) and "".join(parts) == "a\n" * 10
+    assert all(len(p) <= 5 for p in parts) and "".join(p.replace("\n", "") for p in parts) == "a" * 10
+    parts = _split("<pre>x\ny</pre>\n\nsecond block\n\nthird", limit=20)
+    assert parts[0] == "<pre>x\ny</pre>" and parts[1] == "second block" and parts[2] == "third"
 
 
 def test_monitor_and_report_cli(tmp_path, capsys):
