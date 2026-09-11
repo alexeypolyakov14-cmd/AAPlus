@@ -372,7 +372,7 @@ def test_spread_history_service_uses_curve_of_the_day(tmp_path):
     bond, quote = Bond("B1", name="B1", board="TQCB"), Quote("B1", settle, price=100.0, ytm_moex=26.0, duration_moex=1.0)
     pts = svc.series(bond)
     assert pts and all(abs(sp - 1000) < 1e-6 for _, sp in pts) and all(d.weekday() < 5 for d, _ in pts)   # выходные не в ряду: их кривая — чужая дата
-    st = svc.stats(bond, quote, fallback_spread=999.0)
+    st = svc.stats(bond, quote, our_spread=999.0)
     assert st is not None and abs(st.now - 1200) < 1e-6 and abs(st.chg30 - 200) < 1e-6                # «сегодня» в методике MOEX: 26% − 14% = 1200
     svc.save()
     store2 = ZcycStore(str(tmp_path / "zcyc.json"))
@@ -403,3 +403,40 @@ def test_gspread_history_and_issuer_ranks():
     import pytest
     with pytest.raises(ValueError):
         make_strategy("gspread", {"rank": "magic"})
+
+
+def test_spread_history_own_math_matches_screen_metrics(tmp_path):
+    """История по цене закрытия и нашему графику потоков: та же формула, что в скрине, без «доходности к оферте» MOEX."""
+    import json, os
+    from datetime import date, timedelta
+    from bondtrader.analytics.bond_math import compute_metrics
+    from bondtrader.analytics.curve import ZeroCurve
+    from bondtrader.data.history import SpreadHistoryService, ZcycStore
+    from bondtrader.data.moex import apply_bondization, parse_bondization
+    from bondtrader.market import _load_fixtures
+    from bondtrader.models import Quote
+    fix = os.path.join(os.path.dirname(__file__), "fixtures")
+    snap = _load_fixtures(fix)
+    bond, quote = next((b, q) for b, q in snap.universe if b.secid == "RU000A104ZK2")          # МТС 1P-21, оферта 2026-09-01
+    with open(os.path.join(fix, "bondization_mts.json")) as f:
+        bond = apply_bondization(bond, parse_bondization(json.load(f)), snap.settle)
+    assert bond.has_full_schedule
+    settle = snap.settle
+
+    class FakeClient:
+        def history(self, secid, board, start, end):
+            # цена растёт на 0.1 в день → спред сжимается; MOEX-доходность нарочно абсурдная — использоваться не должна
+            return [{"date": settle - timedelta(days=i), "close": quote.price - 0.1 * i, "accrued": 0.0, "face": 1000.0,
+                     "ytm": 300.0, "duration": 0.01} for i in range(1, 45)]
+        def zcyc(self, on):
+            return {"yearyields": {"columns": ["tradedate", "period", "value"], "data": [[on.isoformat(), t, y] for t, y in snap.curve.points]}}
+
+    svc = SpreadHistoryService(FakeClient(), settle, days=60, store=ZcycStore(""), today_curve=snap.curve)
+    pts = svc.series(bond)
+    assert svc.method(bond.secid) == "own" and len(pts) == 44
+    d, sp = pts[-1]
+    m = compute_metrics(bond, Quote(bond.secid, d, price=quote.price - 0.1, accrued=0.0), d, snap.curve)
+    assert abs(sp - m.g_spread) < 1e-9 and all(abs(x) < 5000 for _, x in pts)                    # никаких «30000 б.п.» от оферты
+    our = compute_metrics(bond, quote, settle, snap.curve).g_spread
+    st = svc.stats(bond, Quote(bond.secid, settle, price=quote.price, ytm_moex=300.0, duration_moex=0.01), our)
+    assert st is not None and abs(st.now - our) < 1e-9 and st.chg30 is not None and st.chg30 < 0     # «сегодня» — наш спред, не MOEX

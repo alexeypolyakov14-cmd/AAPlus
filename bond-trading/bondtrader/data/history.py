@@ -1,8 +1,9 @@
-"""История G-спредов с MOEX ISS: дневные доходности бумаги против кривой ОФЗ на ту же дату.
+"""История G-спредов с MOEX ISS: дневные цены закрытия бумаги против кривой ОФЗ на ту же дату.
 
-Спред за прошлую дату = YIELDCLOSE (доходность по цене закрытия, MOEX) − zcyc(дата).yield_at(DURATION MOEX).
-Чтобы «сегодня» было сопоставимо с историей, текущая точка считается в той же методике: биржевые YIELD и
-DURATION из marketdata против сегодняшней кривой (наш собственный YTW/G-спред остаётся в метриках бумаги).
+Спред за прошлую дату считается НАШЕЙ математикой: цена закрытия и НКД из истории MOEX → доходность к худшему по
+полному графику бумаги (как в скрине) → минус zcyc(дата).yield_at(дюрация). Так «сегодня» и история сопоставимы
+(тот же G-спред, что в колонке spread). Доходность MOEX (YIELDCLOSE) для бумаг с офертой считается к оферте и
+перед офертой уходит в тысячи процентов — она используется только как запасной путь, если график бумаги не загружен.
 
 Кривые по датам складываются в книгу data/zcyc_history.json (одна кривая на торговый день, ~20 точек) —
 в CI она едет в кэш вместе с остальными книгами, чтобы не тянуть 60 кривых на каждый запуск.
@@ -15,6 +16,9 @@ import os
 from datetime import date, timedelta
 from typing import Optional
 
+from dataclasses import replace
+
+from ..analytics.bond_math import compute_metrics
 from ..analytics.curve import ZeroCurve
 from ..analytics.history import SpreadStats, spread_stats
 from ..models import Bond, Quote
@@ -68,6 +72,7 @@ class SpreadHistoryService:
         self.today_curve = today_curve
         self._curves: dict[date, Optional[ZeroCurve]] = {}
         self._series: dict[str, list[tuple[date, float]]] = {}
+        self._method: dict[str, str] = {}          # secid -> own (наша математика) | moex (YIELDCLOSE)
         self._stats: dict[str, Optional[SpreadStats]] = {}
         self.failures = 0
 
@@ -99,28 +104,54 @@ class SpreadHistoryService:
         except Exception as e:  # noqa: BLE001
             log.warning("история %s: %s", bond.secid, e)
             rows, self.failures = [], self.failures + 1
+        own = bond.has_full_schedule
+        self._method[bond.secid] = "own" if own else "moex"
         for r in rows:
-            ytm, dur = r.get("ytm"), r.get("duration")
-            if ytm is None or dur is None or dur <= 0 or r["date"] >= self.settle:
+            d = r["date"]
+            if d >= self.settle:
                 continue
-            curve = self.curve_on(r["date"])
-            if curve is None:
-                continue
-            pts.append((r["date"], (ytm - curve.yield_at(dur)) * 100.0))
+            if own:
+                close = r.get("close")
+                if close is None or close <= 0:
+                    continue
+                curve = self.curve_on(d)
+                if curve is None:
+                    continue
+                # номинал на ту дату (амортизация) и НКД — из истории MOEX; график потоков — из бумаги, начиная с той даты
+                face = r.get("face") or bond.face_value
+                b = replace(bond, face_value=face) if face != bond.face_value else bond
+                m = compute_metrics(b, Quote(bond.secid, d, price=close, accrued=r.get("accrued") or 0.0), d, curve)
+                if m is None or m.g_spread is None:
+                    continue
+                pts.append((d, m.g_spread))
+            else:
+                ytm, dur = r.get("ytm"), r.get("duration")
+                if ytm is None or dur is None or dur <= 0:
+                    continue
+                curve = self.curve_on(d)
+                if curve is None:
+                    continue
+                pts.append((d, (ytm - curve.yield_at(dur)) * 100.0))
         pts.sort()
         self._series[bond.secid] = pts
         return pts
 
+    def method(self, secid: str) -> str:
+        return self._method.get(secid, "")
+
     def now_spread(self, quote: Quote, fallback: Optional[float]) -> Optional[float]:
-        """Текущий спред в методике истории (биржевые YIELD/DURATION против сегодняшней кривой), иначе наш G-спред."""
+        """Текущий спред в методике MOEX (YIELD/DURATION из marketdata против сегодняшней кривой), иначе наш G-спред."""
         if self.today_curve is not None and quote.ytm_moex and quote.duration_moex:
             return (quote.ytm_moex - self.today_curve.yield_at(quote.duration_moex)) * 100.0
         return fallback
 
-    def stats(self, bond: Bond, quote: Quote, fallback_spread: Optional[float]) -> Optional[SpreadStats]:
+    def stats(self, bond: Bond, quote: Quote, our_spread: Optional[float]) -> Optional[SpreadStats]:
+        """our_spread — наш текущий G-спред; для истории по нашей математике он и есть «сегодня»."""
         if bond.secid in self._stats:
             return self._stats[bond.secid]
-        st = spread_stats(self.series(bond), self.now_spread(quote, fallback_spread), self.settle, self.days)
+        pts = self.series(bond)
+        now = our_spread if self._method.get(bond.secid) == "own" else self.now_spread(quote, our_spread)
+        st = spread_stats(pts, now, self.settle, self.days)
         self._stats[bond.secid] = st
         return st
 

@@ -1200,7 +1200,7 @@ def cmd_history(args, settings):
         for r in hits:
             hs = hist.get(r.secid)
             print(f"\n{r.secid} {r.bond.name}: рейтинг {r.rating_str}, дюрация {r.metrics.macaulay_duration:.1f}, YTW {r.metrics.yield_worst:.1f}%, "
-                  f"G-спред {r.metrics.g_spread:.0f} б.п. (наш расчёт)")
+                  f"G-спред {r.metrics.g_spread:.0f} б.п.")
             if hs is None:
                 pts = snap.history.series(r.bond)
                 print(f"История: недостаточно наблюдений ({len(pts)} за {snap.history.days} дн.)")
@@ -1233,7 +1233,7 @@ def cmd_history(args, settings):
         if ist is not None and abs(ist.resid) >= 100:
             why.append(f"{ist.resid:+.0f} к кривой эмитента")
         recs.append({"secid": r.secid, "name": r.bond.name, "rating": r.rating_str, "dur": round(r.metrics.macaulay_duration, 1),
-                     "spread": round(r.metrics.g_spread), "hist_now": round(hs.now), "med": round(hs.median), "z": round(hs.z, 1),
+                     "spread": round(hs.now), "med": round(hs.median), "z": round(hs.z, 1),
                      "chg30": None if hs.chg30 is None else round(hs.chg30), "chg60": None if hs.chg60 is None else round(hs.chg60),
                      "lo": round(hs.lo), "hi": round(hs.hi), "n": hs.n, "first": hs.first, "regime": hs.regime, "why": "; ".join(why) or "—"})
     if not recs:
@@ -1246,8 +1246,10 @@ def cmd_history(args, settings):
     df = df.sort_values(key, ascending=False, na_position="last")
     if args.regime:
         df = df[df["regime"] == args.regime]
-    print(f"\nСпред против собственной истории за {snap.history.days} дн. (hist_now/med/lo/hi — в методике MOEX YIELD, spread — наш расчёт; "
-          f"chg30/chg60 — изменение к уровню 30/60 дней назад; сортировка по {key}):")
+    moex_only = sum(1 for r in corp if r.secid in hist and snap.history.method(r.secid) == "moex")
+    print(f"\nСпред против собственной истории за {snap.history.days} дн. (G-спред по нашей математике от цен закрытия MOEX"
+          + (f"; у {moex_only} бумаг без графика — по доходности MOEX" if moex_only else "")
+          + f"; chg30/chg60 — изменение к уровню 30/60 дней назад; сортировка по {key}):")
     _print_df(df.head(args.top), csv=args.csv)
     if args.bottom:
         print(f"\nСильнее всего сжались (топ {args.bottom}):")

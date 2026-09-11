@@ -118,7 +118,6 @@ jobs:
             bond-trading/data/financials.csv
             bond-trading/data/issuers.csv
             bond-trading/data/disclosure.csv
-            bond-trading/data/zcyc_history.json
           key: books-${{ github.run_id }}
           restore-keys: |
             books-
@@ -155,7 +154,6 @@ jobs:
             bond-trading/data/financials.csv
             bond-trading/data/issuers.csv
             bond-trading/data/disclosure.csv
-            bond-trading/data/zcyc_history.json
           if-no-files-found: ignore
       - name: Сигналы стратегий
         run: |
@@ -219,12 +217,17 @@ jobs:
             bond-trading/data/financials.csv
             bond-trading/data/issuers.csv
             bond-trading/data/disclosure.csv
-            bond-trading/data/zcyc_history.json
           key: books-${{ github.run_id }}
           restore-keys: |
             books-
             daily-books-
             credit-books-
+      - name: Книга кривых ОФЗ по датам (кэш; отдельный ключ — версия кэша книг не меняется)
+        uses: actions/cache@v4
+        with:
+          path: bond-trading/data/zcyc_history.json
+          key: zcyc-${{ github.run_id }}
+          restore-keys: zcyc-
       - name: Рейтинги (обновление, накопительно; АКРА — только свежие пресс-релизы)
         continue-on-error: true
         run: bondtrader ratings fetch --pages 8 2>&1 | tail -3
@@ -301,12 +304,17 @@ jobs:
             bond-trading/data/financials.csv
             bond-trading/data/issuers.csv
             bond-trading/data/disclosure.csv
-            bond-trading/data/zcyc_history.json
           key: books-none
           restore-keys: |
             books-
             daily-books-
             credit-books-
+      - name: Книга кривых ОФЗ по датам (кэш)
+        uses: actions/cache/restore@v4
+        with:
+          path: bond-trading/data/zcyc_history.json
+          key: zcyc-none
+          restore-keys: zcyc-
       - name: Ответить на накопившиеся нажатия и команды
         run: |
           if [ -n "$TINVEST_TOKEN" ]; then BR="--broker tinvest"; else BR=""; fi
@@ -338,12 +346,17 @@ jobs:
             bond-trading/data/financials.csv
             bond-trading/data/issuers.csv
             bond-trading/data/disclosure.csv
-            bond-trading/data/zcyc_history.json
           key: books-${{ github.run_id }}
           restore-keys: |
             books-
             daily-books-
             credit-books-
+      - name: Книга кривых ОФЗ по датам (кэш; отдельный ключ — версия кэша книг не меняется)
+        uses: actions/cache@v4
+        with:
+          path: bond-trading/data/zcyc_history.json
+          key: zcyc-${{ github.run_id }}
+          restore-keys: zcyc-
       - name: Выпуски и статус в скрине
         if: env.LOOKUP != ''
         run: |
@@ -407,7 +420,6 @@ jobs:
             bond-trading/data/financials.csv
             bond-trading/data/issuers.csv
             bond-trading/data/disclosure.csv
-            bond-trading/data/zcyc_history.json
           key: books-none
           restore-keys: |
             books-
