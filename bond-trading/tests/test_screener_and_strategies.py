@@ -440,3 +440,29 @@ def test_spread_history_own_math_matches_screen_metrics(tmp_path):
     our = compute_metrics(bond, quote, settle, snap.curve).g_spread
     st = svc.stats(bond, Quote(bond.secid, settle, price=quote.price, ytm_moex=300.0, duration_moex=0.01), our)
     assert st is not None and abs(st.now - our) < 1e-9 and st.chg30 is not None and st.chg30 < 0     # «сегодня» — наш спред, не MOEX
+
+
+def test_history_near_offer_is_flagged_and_excluded_from_history_rank():
+    from datetime import date, timedelta
+    from bondtrader.analytics.history import SpreadStats
+    from bondtrader.data.history import SpreadHistoryService, ZcycStore
+    from bondtrader.models import Bond, Quote
+    from bondtrader.portfolio import Portfolio
+    from bondtrader.strategies import MarketContext, make_strategy
+    settle = date(2025, 6, 2)
+
+    class FakeClient:
+        def history(self, secid, board, start, end):
+            return [{"date": settle - timedelta(days=i), "ytm": 25.0, "duration": 1.0, "close": 100.0} for i in range(1, 40)]
+        def zcyc(self, on):
+            return {"yearyields": {"columns": ["tradedate", "period", "value"], "data": [[on.isoformat(), 0.5, 15.0], [on.isoformat(), 2.0, 15.0]]}}
+    svc = SpreadHistoryService(FakeClient(), settle, days=60, store=ZcycStore(""))
+    soon = Bond("O1", name="O1", board="TQCB", offer_date=settle + timedelta(days=30))
+    far = Bond("O2", name="O2", board="TQCB", offer_date=settle + timedelta(days=400))
+    st_soon, st_far = svc.stats(soon, Quote("O1", settle, price=100.0), 1500.0), svc.stats(far, Quote("O2", settle, price=100.0), 1500.0)
+    assert st_soon.note.startswith("оферта") and st_soon.regime == "оферта" and not st_soon.reliable and "ненадёжно" in st_soon.describe()
+    assert st_far.reliable and st_far.regime == "расширение"
+    rows = [_row("O1", 1500, "BB"), _row("O2", 1500, "BB")]
+    ctx = MarketContext(settle, rows, None, None, Portfolio(cash=1e6), {}, {"O1": st_soon, "O2": st_far}, {})
+    st = make_strategy("gspread", {"top_n": 5, "rank": "history", "min_excess_bp": 100, "per_issuer": 0})
+    assert list(st.targets(ctx)) == ["O2"]

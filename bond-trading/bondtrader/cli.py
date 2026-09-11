@@ -1090,7 +1090,9 @@ def cmd_spreads(args, settings):
         if lag:
             why.append(lag)
         if hs is not None:
-            if hs.fresh:
+            if hs.note:
+                why.append(f"история ненадёжна: {hs.note}")
+            elif hs.fresh:
                 why.append(f"первичка (первая сделка {hs.first})")
             elif hs.chg30 is not None and abs(hs.chg30) >= 100:
                 why.append(f"спред {hs.chg30:+.0f} б.п. за 30 дн. (z={hs.z:+.1f})")
@@ -1405,7 +1407,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("query", nargs="?", help="бумага (часть названия/SECID/ISIN; несколько через запятую) — ряд по ней; без аргумента — таблица по срезу")
     sp.add_argument("--days", type=int, default=0, help="окно истории, дн. (по умолчанию data.history_days)"); sp.add_argument("--top", type=int, default=40)
     sp.add_argument("--bottom", type=int, default=0, help="показать и сильнее всего сжавшиеся"); sp.add_argument("--sort", choices=["chg30", "z", "chg60"], default="chg30")
-    sp.add_argument("--regime", choices=["расширение", "сжатие", "стабильно", "первичка"], help="только бумаги в этом режиме")
+    sp.add_argument("--regime", choices=["расширение", "сжатие", "стабильно", "первичка", "оферта"], help="только бумаги в этом режиме")
     sp.add_argument("--points", type=int, default=20, help="сколько точек ряда печатать для одной бумаги"); sp.add_argument("--csv")
     sp.set_defaults(fn=cmd_history)
     sp = sub.add_parser("issuer", parents=[common], help="кривая эмитента: платит ли выпуск больше других выпусков того же эмитента"); screen_opts(sp)

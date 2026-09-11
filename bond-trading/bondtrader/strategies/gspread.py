@@ -5,7 +5,8 @@ rank = "peers"   — превышение над медианой своей с�
                    чем за соседей по рейтингу; min_excess_bp отсекает тех, кто платит не больше соседей.
 rank = "model"   — остаток к регрессии справедливого спреда (рейтинг, дюрация, оборот, листинг).
 rank = "history" — расширение спреда за 30 дней против собственной истории бумаги (ctx.history_stats): «что-то
-                   случилось», а не «всегда так торговалась»; бумаги без истории не участвуют.
+                   случилось», а не «всегда так торговалась»; бумаги без истории и с офертой рядом (история ненадёжна)
+                   не участвуют.
 rank = "issuer"  — превышение над кривой самого эмитента (ctx.issuer_stats): один выпуск шире соседей по эмитенту;
                    эмитенты с одним выпуском не участвуют.
 После сита ликвидности и стоп-факторов берём top_n, не больше per_issuer выпусков одного эмитента,
@@ -49,7 +50,7 @@ class GSpreadStrategy(Strategy):
             return {s: ps.excess for s, ps in self.peers.items()}
         if self.rank == "history":
             return {r.secid: ctx.history_stats[r.secid].chg30 for r in universe
-                    if r.secid in ctx.history_stats and ctx.history_stats[r.secid].chg30 is not None}
+                    if r.secid in ctx.history_stats and ctx.history_stats[r.secid].chg30 is not None and ctx.history_stats[r.secid].reliable}
         if self.rank == "issuer":
             return {r.secid: ctx.issuer_stats[r.secid].resid for r in universe if r.secid in ctx.issuer_stats}
         return {r.secid: r.metrics.g_spread for r in universe}

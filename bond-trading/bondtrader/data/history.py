@@ -25,6 +25,8 @@ from ..models import Bond, Quote
 
 log = logging.getLogger(__name__)
 
+OFFER_GUARD_DAYS = 120   # оферта ближе, чем через столько дней (или уже была в окне), — история помечается ненадёжной
+
 
 class ZcycStore:
     """Книга кривых ОФЗ по датам: {ISO-дата: [[тенор, доходность], ...]}."""
@@ -152,6 +154,10 @@ class SpreadHistoryService:
         pts = self.series(bond)
         now = our_spread if self._method.get(bond.secid) == "own" else self.now_spread(quote, our_spread)
         st = spread_stats(pts, now, self.settle, self.days)
+        if st is not None and bond.offer_date and self.settle - timedelta(days=self.days) <= bond.offer_date <= self.settle + timedelta(days=OFFER_GUARD_DAYS):
+            # оферта внутри окна или в ближайшие месяцы: доходность к оферте на коротком сроке прыгает на тысячи б.п.
+            # от копеечного движения цены (Автоассистанс: −2653…+3186 за 90 дн.) — динамика не про кредитное качество
+            st.note = f"оферта {bond.offer_date}"
         self._stats[bond.secid] = st
         return st
 

@@ -34,10 +34,18 @@ class SpreadStats:
     chg60: Optional[float]        # now − медиана спредов 55–65 дней назад, б.п.
     fresh: bool                   # похоже на первичку: мало наблюдений и первая сделка позже начала окна
     window_days: int
+    note: str = ""                # почему истории нельзя верить (напр. «оферта 2026-09-25»): доходность к близкой
+                                  # оферте гиперчувствительна к цене, ряд и динамика в б.п. теряют смысл
+
+    @property
+    def reliable(self) -> bool:
+        return not self.note
 
     @property
     def regime(self) -> str:
-        """Одно слово для колонки: расширение / сжатие / стабильно / первичка."""
+        """Одно слово для колонки: расширение / сжатие / стабильно / первичка / оферта."""
+        if self.note:
+            return "оферта"
         if self.fresh:
             return "первичка"
         if self.chg30 is not None and self.chg30 >= 150 and self.z >= 1.5:
@@ -54,6 +62,8 @@ class SpreadStats:
             parts.append(f"за 60 дн. {self.chg60:+.0f} б.п.")
         if self.fresh:
             parts.append(f"первая сделка {self.first}, наблюдений {self.n} — первичка")
+        if self.note:
+            parts.append(f"ненадёжно: {self.note}")
         return "; ".join(parts)
 
 
@@ -76,8 +86,10 @@ def spread_stats(points: list[tuple[date, float]], now: Optional[float], settle:
     if mad < 1e-9:
         sd = statistics.pstdev(spreads)
         mad = sd if sd > 1e-9 else 0.0
-    z = (now - med) / mad if mad > 0 else 0.0
-    z = max(-Z_CAP, min(Z_CAP, z))
+    if mad > 0:
+        z = max(-Z_CAP, min(Z_CAP, (now - med) / mad))
+    else:   # ряд без разброса: любой сдвиг от него — предельная аномалия
+        z = 0.0 if abs(now - med) < 1e-9 else (Z_CAP if now > med else -Z_CAP)
     below = sum(1 for s in spreads if s < now)
     past30 = _median_near(pts, settle, 30)
     past60 = _median_near(pts, settle, 60)
