@@ -90,3 +90,16 @@ def test_ratings_commands(capsys, cfg, tmp_path):
     out = run(capsys, "--fixtures", FIX, "-c", str(c), "screen", "--min-rating", "AA")
     assert "RU000A106K43" in out and "RU000A107RZ0" in out  # без рейтинга не отсекаются
     assert "Рейтинги: 1 записей" in out
+
+
+def test_why_command(capsys):
+    from bondtrader.cli import main
+    assert main(["--fixtures", FIX, "why", "ВИС"]) == 0
+    out = capsys.readouterr().out
+    assert "ВИС Ф БП04" in out and "status" in out and "найдено" in out
+    try:
+        main(["--fixtures", FIX, "why", "НЕТТАКОГО"])
+    except SystemExit as e:
+        assert "ничего не найдено" in str(e)
+    else:
+        raise AssertionError("ожидался SystemExit")

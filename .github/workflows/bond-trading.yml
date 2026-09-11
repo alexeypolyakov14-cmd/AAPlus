@@ -25,6 +25,10 @@ on:
         description: "Бот: дополнительно прислать справку с кнопками"
         type: boolean
         default: false
+      lookup:
+        description: "Почему бумага (не) в скрине: часть названия эмитента, SECID или ISIN (напр. НЛМК)"
+        type: string
+        default: ""
       strategy:
         description: "Стратегия для песочницы"
         type: choice
@@ -290,10 +294,41 @@ jobs:
           MENU=""; if [ "${{ inputs.bot_menu }}" = "true" ]; then MENU="--menu"; fi
           bondtrader bot $BR $MENU
 
+  lookup:
+    name: Почему бумага (не) в скрине (профиль hy)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.lookup != ''
+    env:
+      BONDTRADER_CONFIG: configs/hy.yaml
+      LOOKUP: ${{ inputs.lookup }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: bond-trading/requirements.txt
+      - run: pip install -e .
+      - name: Книги (кэш) — рейтинги, новости, отчётность, факты
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            bond-trading/data/ratings.csv
+            bond-trading/data/news.csv
+            bond-trading/data/financials.csv
+            bond-trading/data/issuers.csv
+            bond-trading/data/disclosure.csv
+          key: daily-books-none
+          restore-keys: |
+            daily-books-
+            credit-books-
+      - name: Выпуски и статус в скрине
+        run: bondtrader why "$LOOKUP" | tee -a "$GITHUB_STEP_SUMMARY"
+
   sandbox:
     name: Песочница T-Invest (ручной запуск, нужен секрет TINVEST_TOKEN)
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' && !inputs.bot && !inputs.telegram_setup
+    if: github.event_name == 'workflow_dispatch' && !inputs.bot && !inputs.telegram_setup && inputs.lookup == ''
     env:
       TINVEST_TOKEN: ${{ secrets.TINVEST_TOKEN }}
       BONDTRADER_CONFIG: ${{ inputs.profile == 'default' && 'config.yaml' || format('configs/{0}.yaml', inputs.profile) }}

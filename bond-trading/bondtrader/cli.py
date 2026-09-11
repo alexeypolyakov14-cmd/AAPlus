@@ -161,6 +161,50 @@ def cmd_bond(args, settings):
         print(pd.DataFrame([(f.date, f.coupon, f.principal) for f in flows], columns=["date", "coupon", "principal"]).to_string(index=False))
 
 
+def cmd_why(args, settings):
+    """Все выпуски эмитента (поиск по названию/SECID/ISIN): прошёл ли сито, почему нет, проходит ли риск-лимиты и стратегию."""
+    from .analytics.bond_math import compute_metrics
+    snap = load_snapshot(settings, args.fixtures)
+    q = args.query.strip().upper()
+    matches = [(b, qt) for b, qt in snap.universe
+               if q in (b.name or "").upper() or q in (b.full_name or "").upper() or b.secid.upper() == q or (b.isin or "").upper() == q]
+    if not matches:
+        raise SystemExit(f"«{args.query}»: ничего не найдено среди {len(snap.universe)} бумаг на площадках {settings.get('data', 'boards')}")
+    _header(snap)
+    rows = _screen(snap, settings, args)
+    by_id = {r.secid: r for r in rows}
+    risk = RiskManager(RiskLimits.from_dict(settings.get("risk", default={})))
+    eligible = {r.secid for r in risk.eligible(rows)}
+    name, params = _strategy_spec(args, settings)
+    st = make_strategy(name, params)
+    recs = []
+    for b, qt in matches:
+        r = by_id.get(b.secid)
+        if r is not None:
+            m = r.metrics
+            if b.secid not in eligible:
+                status = "в скрине, но вне риск-лимитов (спред/листинг/рейтинг)"
+            elif hasattr(st, "is_candidate") and not st.is_candidate(r):
+                status = f"в скрине, но вне вселенной {name} (рейтинг лучше {getattr(st, 'max_rating', '') or '—'} или спред < {getattr(st, 'min_spread_bp', 0):.0f} б.п.)"
+            elif hasattr(st, "max_duration") and m.macaulay_duration > st.max_duration:
+                status = f"в скрине, но дюрация {m.macaulay_duration:.1f} > {st.max_duration} ({name})"
+            else:
+                why = st.stop_reason(r) if hasattr(st, "stop_reason") else None
+                status = f"стоп-фактор {name}: {why}" if why else f"кандидат {name}"
+        else:
+            bb = snap.enrich(b) if snap.enrich is not None and not b.has_full_schedule else b
+            m = compute_metrics(bb, qt, snap.settle, snap.curve)
+            status = f"отсев: {snap.rejected.get(b.secid, 'не попала в вселенную скрина')}"
+        rating = snap.ratings.lookup(b) if snap.ratings is not None and not b.is_ofz else None
+        recs.append({"secid": b.secid, "name": b.name, "level": b.list_level, "floater": b.is_floater,
+                     "rating": rating.rating if rating else "—", "price": qt.price,
+                     "ytw": round(m.yield_worst, 2) if m else None, "duration": round(m.macaulay_duration, 2) if m else None,
+                     "g_spread": round(m.g_spread) if m and m.g_spread is not None else None,
+                     "turnover_mln": round((qt.turnover or 0) / 1e6, 1), "maturity": b.maturity, "status": status})
+    print(f"«{args.query}»: найдено {len(recs)} выпусков; в скрине {sum(1 for x in recs if not x['status'].startswith('отсев'))}\n")
+    print(pd.DataFrame(recs).to_string(index=False))
+
+
 def _build_context(args, settings) -> tuple[MarketSnapshot, list[ScreenRow], Portfolio, object]:
     snap = load_snapshot(settings, args.fixtures)
     rows = RiskManager(RiskLimits.from_dict(settings.get("risk", default={}))).eligible(_screen(snap, settings, args))
@@ -1029,6 +1073,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--md", help="сохранить в файл"); sp.add_argument("--telegram", action="store_true", help="отправить в Telegram (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)")
     sp.add_argument("--tg-file", help="сохранить Telegram-версию (HTML) в файл")
     sp.set_defaults(fn=cmd_report)
+    sp = sub.add_parser("why", parents=[common], help="выпуски эмитента: прошли ли сито, почему нет, проходят ли риск-лимиты и стратегию"); screen_opts(sp); strat_opts(sp)
+    sp.add_argument("query", help="часть названия (НЛМК), SECID или ISIN"); sp.set_defaults(fn=cmd_why)
     sp = sub.add_parser("notify", parents=[common], help="отправить текст/файл в Telegram"); sp.add_argument("--file"); sp.add_argument("--text")
     sp.add_argument("--whoami", action="store_true", help="показать chat_id тех, кто писал боту (для секрета TELEGRAM_CHAT_ID)")
     sp.add_argument("--html", action="store_true", help="файл уже в HTML-разметке Telegram (report --tg-file)")
