@@ -108,9 +108,17 @@ def discover_deep(urls: Optional[list[str]] = None) -> None:
         print(f"   data-url attrs: {data_attrs}")
         rows = len(re.findall(r"<tr", text, re.I))
         print(f"   <tr> count: {rows}; 'Показать ещё'/'load more' hits: {len(re.findall(r'(?i)показать ещ|load more|ещё', text))}")
-        for m in list(re.finditer(r"(?i)pagination|paginat|b-pager|pager", text))[:3]:
+        for m in list(re.finditer(r"(?i)pagination|paginat|b-pager|pager", text))[:1]:
             i = m.start()
             print("   near pager: " + re.sub(r"\s+", " ", text[max(0, i - 300): i + 500])[:800])
+        # тела JS-функций и переменных, отвечающих за пагинацию/экспорт
+        for key in ("function setRatingPageHash", "CSRFAjaxTokenPageHash", "rating_page_hash", "export_checkbox", "function exportRatings",
+                    "ratings-export", "FRAGMENT", "PAGEN_1", "issuers-list", "emissions-list", "ajax/list", "getList"):
+            for m in list(re.finditer(re.escape(key), text))[:2]:
+                i = m.start()
+                print(f"   JS[{key}]: " + re.sub(r"\s+", " ", text[max(0, i - 200): i + 900]))
+        forms_full = re.findall(r"<form[^>]*>", text, re.I)
+        print("   form tags: " + " | ".join(re.sub(r"\s+", " ", f)[:220] for f in forms_full[:12]))
 
 
 # ---------------------------------------------------------------------------
