@@ -78,11 +78,14 @@ class ScreenerConfig:
     exclude_offers: bool = False
     max_bid_ask_pct: float = 1.0
     max_g_spread_bp: float = 1500
+    min_g_spread_bp: float = 0.0     # для ВДО-профиля удобнее задавать не доходность, а спред к ОФЗ
     min_price: float = 50.0
+    exclude_structured: bool = True  # СФО / ипотечные агенты / транши
     issuer_blacklist: list[str] = field(default_factory=list)
     ofz_only: bool = False
     corporate_only: bool = False
     min_rating: str = ""             # напр. "BB-": бумаги с худшим рейтингом отсеиваются
+    max_rating: str = ""             # напр. "BBB+": бумаги с лучшим рейтингом отсеиваются (вселенная ВДО); без рейтинга — проходят
     require_rating: bool = False     # без рейтинга — отсев (ОФЗ считаются AAA)
     exclude_default_days: int = 365  # отсев эмитентов с (тех)дефолтом/реструктуризацией за N дней (книга событий)
     min_fin_score: float = 0.0       # отсев по баллу отчётности (0 — не применять); бумаги без отчётности не трогаем
@@ -119,6 +122,8 @@ class Screener:
             return "флоатер"
         if c.exclude_linkers and bond.is_linker:
             return "линкер"
+        if c.exclude_structured and bond.is_structured:
+            return "структурная (СФО/ИА)"
         if c.exclude_amortization and bond.has_amortization:
             return "амортизация"
         if c.exclude_offers and bond.has_offer and bond.offer_date and bond.offer_date > settle:
@@ -144,6 +149,8 @@ class Screener:
             return f"дюрация {m.macaulay_duration:.1f} вне диапазона"
         if m.g_spread is not None and m.g_spread > c.max_g_spread_bp:
             return f"G-спред {m.g_spread:.0f} б.п. (дистресс)"
+        if c.min_g_spread_bp > 0 and m.g_spread is not None and m.g_spread < c.min_g_spread_bp:
+            return f"G-спред {m.g_spread:.0f} б.п. ниже {c.min_g_spread_bp:.0f}"
         return None
 
     def run(self, universe: list[tuple[Bond, Quote]], curve: Optional[ZeroCurve], settle: date,
@@ -195,7 +202,7 @@ class Screener:
                 rating = Rating("Минфин России", "—", "AAA", kind="issuer")
             elif ratings is not None:
                 rating = ratings.lookup(bond)
-            if c.min_rating or c.require_rating:
+            if c.min_rating or c.require_rating or c.max_rating:
                 if rating is None:
                     if c.require_rating:
                         self.rejected[bond.secid] = "нет рейтинга"
@@ -203,8 +210,14 @@ class Screener:
                 elif c.min_rating and not rating_at_least(rating.rating, c.min_rating):
                     self.rejected[bond.secid] = f"рейтинг {rating.rating} ниже {c.min_rating}"
                     continue
+                elif c.max_rating and not bond.is_ofz and rating_at_least(rating.rating, c.max_rating) and rating.rating != c.max_rating.upper():
+                    self.rejected[bond.secid] = f"рейтинг {rating.rating} выше {c.max_rating}"
+                    continue
             if enrich is not None and not bond.has_full_schedule:
                 bond = enrich(bond)  # полный график купонов/амортизаций/оферт — иначе YTM расходится с биржевым
+                if c.exclude_floaters and bond.is_floater:
+                    self.rejected[bond.secid] = "флоатер"   # по графику: будущие купоны не определены
+                    continue
             m = compute_metrics(bond, quote, settle, curve)
             if m is None:
                 # fallback на биржевые данные, если наш расчёт невозможен

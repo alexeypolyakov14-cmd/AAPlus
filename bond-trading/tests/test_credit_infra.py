@@ -262,3 +262,39 @@ def test_cli_books_commands(tmp_path, capsys):
     assert main(["-c", str(cfg), "--fixtures", FIX, "signals", "-s", "value_hy"]) == 0
     out = capsys.readouterr().out
     assert "Отчётность: 1 эмитентов" in out and "Новости: 1 новостей" in out and "value_hy" in out
+
+
+def test_structured_and_rating_cap_and_floater_after_enrich(universe, curve):
+    from bondtrader.data.ratings import Rating, RatingsBook
+    assert Bond("X", name="СБСекр5АС", full_name="СФО СБ Секьюритизация 5 кл.АC").is_structured
+    assert Bond("Y", name="Титан-5 А", full_name="ИА Титан-5 А").is_structured
+    assert Bond("Z", name="Сплит ПВ-3", full_name="СФО Сплит Финанс ПВ-3").is_structured
+    assert not Bond("W", name="БалтЛизП16", full_name="Балтийский лизинг ООО БО-П16").is_structured
+    book = RatingsBook([Rating("ВИС Финанс", "АКРА", "A", alias="ВИС Ф"), Rating("Газпром нефть", "АКРА", "AAA", alias="Газпнф"),
+                        Rating("Сбербанк", "АКРА", "BBB", alias="Сбер")])
+    scr = Screener(ScreenerConfig(min_turnover=1e6, max_list_level=2, max_bid_ask_pct=1.0, max_rating="BBB+"))
+    rows = scr.run(universe, curve, SETTLE, ratings=book)
+    ids = {r.secid for r in rows}
+    assert "RU000A103WV8" not in ids and scr.rejected["RU000A103WV8"].startswith("рейтинг A выше")
+    assert "RU000A106K43" in ids and any(r.bond.is_ofz for r in rows)   # BBB проходит, ОФЗ не режем
+    # value_hy: кандидаты только ≤ max_rating, модель — по всем
+    st = make_strategy("value_hy", {"top_n": 5, "max_rating": "BBB+", "ofz_min_share": 0.0})
+    rows3 = Screener(ScreenerConfig(min_turnover=1e6, max_list_level=2, max_bid_ask_pct=1.0)).run(universe, curve, SETTLE, ratings=book)
+    t = st.targets(MarketContext(SETTLE, rows3, curve, portfolio=Portfolio()))
+    assert "RU000A106K43" in t and "RU000A103WV8" not in t and "RU000A107RZ0" not in t
+    # флоатер по графику (будущие купоны неизвестны) отсеивается после enrich (enrich мутирует Bond — поэтому в конце теста)
+    def enrich(b):
+        if b.secid == "RU000A106K43":
+            b.coupons = [(date(2025, 12, 1), 40.0), (date(2026, 6, 1), None), (date(2026, 12, 1), None), (date(2027, 6, 1), None)]
+            b.has_full_schedule = True
+        return b
+    scr2 = Screener(ScreenerConfig(min_turnover=1e6, max_list_level=2, max_bid_ask_pct=1.0))
+    rows2 = scr2.run(universe, curve, SETTLE, enrich=enrich)
+    assert "RU000A106K43" not in {r.secid for r in rows2} and scr2.rejected["RU000A106K43"] == "флоатер"
+
+
+def test_spreads_cli(capsys):
+    from bondtrader.cli import main
+    assert main(["--fixtures", FIX, "spreads", "--top", "5", "--bottom", "2"]) == 0
+    out = capsys.readouterr().out
+    assert "Спреды к кривой ОФЗ по ступеням" in out and "vs_peers" in out and "За что платят меньше" in out

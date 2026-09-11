@@ -110,6 +110,8 @@ jobs:
           bondtrader -c configs/hy.yaml news list --negative --top 30
           bondtrader -c configs/hy.yaml financials coverage | head -50
           bondtrader -c configs/hy.yaml disclosure list --kind default tech_default restructuring | head -30
+          bondtrader -c configs/hy.yaml spreads --top 40 --bottom 10
+          bondtrader -c configs/hy.yaml screen --top 40 -v 2>&1 | grep -v DEBUG
           bondtrader -c configs/hy.yaml signals
       - uses: actions/upload-artifact@v4
         with:

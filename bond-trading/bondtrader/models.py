@@ -20,6 +20,10 @@ class CashFlow:
 
 
 FLOATER_NAME_RE = re.compile(r"(ПК|флоат|float|FRN|-ФЛ|КС\+|RUONIA)", re.IGNORECASE)
+# Структурные бумаги: секьюритизация (СФО), ипотечные агенты (ИА), транши классов А/Б — амортизация зависит от
+# досрочных погашений пула, наша модель денежных потоков к ним неприменима.
+STRUCTURED_RE = re.compile(r"(^|\s)(СФО|ИА|СБСекр|СБ Секьюр|Сплит|ТБ-\d|ДОМ\.РФ ИА)|секьюрит|ипотечн\w+ агент|специализированн\w+ финансов\w+ обществ|"
+                           r"\bкл\.? ?[АБA-C]\d?\b|класс[аы]? [АБ]\b", re.IGNORECASE)
 
 
 @dataclass
@@ -66,6 +70,13 @@ class Bond:
             # первый купон, как правило, известен; если дальше неизвестны — флоатер
             return len(future) > 0 and len(future) >= max(1, len(self.coupons) - 2)
         return False
+
+    @property
+    def is_structured(self) -> bool:
+        """Секьюритизация / ипотечные агенты / транши: по маркерам в кратком и полном названии."""
+        if self.is_ofz:
+            return False
+        return bool(STRUCTURED_RE.search(self.name or "") or STRUCTURED_RE.search(self.full_name or ""))
 
     @property
     def is_linker(self) -> bool:

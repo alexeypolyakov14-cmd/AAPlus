@@ -800,6 +800,90 @@ def cmd_news(args, settings):
         return
 
 
+def _rating_change(snap: MarketSnapshot, bond) -> str:
+    """«↓ BBB→BB+ (2026-08-28, Эксперт РА)» если последнее действие агентства изменило ступень за 180 дней."""
+    if snap.ratings is None or bond.is_ofz:
+        return ""
+    from .data.ratings import GRADE
+    cands = sorted((r for r in snap.ratings.candidates(bond) if r.date), key=lambda r: r.date)
+    if len(cands) < 2:
+        return ""
+    last = cands[-1]
+    if (snap.settle - last.date).days > 180:
+        return ""
+    prev = next((r for r in reversed(cands[:-1]) if r.agency == last.agency), None) or cands[-2]
+    if GRADE[prev.rating] == GRADE[last.rating]:
+        return ""
+    arrow = "↓" if GRADE[last.rating] > GRADE[prev.rating] else "↑"
+    return f"{arrow} {prev.rating}→{last.rating} ({last.date}, {last.agency})"
+
+
+def cmd_spreads(args, settings):
+    """Шаги 2–3 алгоритма: спреды по ступеням рейтинга и бумаги, за которые рынок требует больше, чем за похожие."""
+    from .analytics.fair_spread import features_of, fit_fair_spread
+    from .data.ratings import GRADE, SCALE
+    snap = load_snapshot(settings, args.fixtures)
+    rows = _screen(snap, settings, args)
+    _header(snap)
+    corp = [r for r in rows if not r.bond.is_ofz and not r.bond.is_floater and r.metrics.g_spread is not None]
+    model = fit_fair_spread(corp)
+    print(f"Модель справедливого спреда: {model.describe()}\n")
+    # --- таблица по ступеням ---
+    import statistics
+    buckets: dict[str, list] = {}
+    for r in corp:
+        buckets.setdefault(r.rating.rating if r.rating else "—", []).append(r)
+    order = {g: i for i, g in enumerate(SCALE)}
+    recs = []
+    for g, rs in sorted(buckets.items(), key=lambda kv: order.get(kv[0], 99)):
+        sp = [r.metrics.g_spread for r in rs]
+        recs.append({"rating": g, "n": len(rs), "spread_med": round(statistics.median(sp)), "spread_p25": round(sorted(sp)[len(sp) // 4]),
+                     "spread_p75": round(sorted(sp)[(3 * len(sp)) // 4]), "ytw_med": round(statistics.median(r.metrics.yield_worst for r in rs), 1),
+                     "dur_med": round(statistics.median(r.metrics.macaulay_duration for r in rs), 1)})
+    print("Спреды к кривой ОФЗ по ступеням рейтинга (б.п.):")
+    print(pd.DataFrame(recs).to_string(index=False))
+    # --- остатки: за что платят больше внутри ступени ---
+    out = []
+    for r in corp:
+        if args.rating and (r.rating.rating if r.rating else "—") != args.rating.upper():
+            continue
+        g = r.rating.rating if r.rating else "—"
+        peers = [x.metrics.g_spread for x in buckets[g]]
+        med = statistics.median(peers)
+        resid_model = model.residual(features_of(r), r.metrics.g_spread) if model.ok else float("nan")
+        why = []
+        if r.news is not None and r.news.n:
+            why.append(f"новости {r.news.score:+.1f}" + (f" ({r.news.worst.tags.split(',')[0]})" if r.news.worst else ""))
+        ch = _rating_change(snap, r.bond)
+        if ch:
+            why.append("рейтинг " + ch)
+        if r.fin is not None:
+            why.append(f"отчётность {r.fin.score:.0f}" + (": " + "; ".join(r.fin.flags[:2]) if r.fin.flags else ""))
+        if r.stop_events:
+            why.append(f"факт {r.stop_events[-1].kind}")
+        if r.bond.has_offer and r.bond.offer_date and r.bond.offer_date > snap.settle:
+            why.append(f"оферта {r.bond.offer_date}")
+        if r.bond.has_amortization:
+            why.append("амортизация")
+        if r.bond.list_level == 3:
+            why.append("3-й уровень")
+        if r.quote.turnover < 3e6:
+            why.append(f"оборот {r.quote.turnover / 1e6:.1f} млн")
+        out.append({"secid": r.secid, "name": r.bond.name, "rating": g, "dur": round(r.metrics.macaulay_duration, 1),
+                    "ytw": round(r.metrics.yield_worst, 1), "spread": round(r.metrics.g_spread), "vs_peers": round(r.metrics.g_spread - med),
+                    "vs_model": None if resid_model != resid_model else round(resid_model), "sector": r.sector, "why": "; ".join(why) or "—"})
+    df = pd.DataFrame(out)
+    if df.empty:
+        print("\n(нет корпоративных бумаг)")
+        return
+    df = df.sort_values("vs_peers", ascending=False)
+    print(f"\nЗа что платят больше, чем за соседей по ступени (топ {args.top}; vs_peers — к медиане ступени, vs_model — к регрессии):")
+    _print_df(df.head(args.top), csv=args.csv)
+    if args.bottom:
+        print(f"\nЗа что платят меньше (топ {args.bottom}):")
+        print(df.tail(args.bottom).iloc[::-1].to_string(index=False))
+
+
 def cmd_strategies(args, settings):
     for name, cls in STRATEGIES.items():
         doc = (cls.__doc__ or "").strip().splitlines()[0]
@@ -837,6 +921,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("screen", help="скринер облигаций", parents=[common]); screen_opts(sp)
     sp.add_argument("--top", type=int, default=40); sp.add_argument("--csv"); sp.set_defaults(fn=cmd_screen)
     sp = sub.add_parser("curve", parents=[common], help="кривая ОФЗ"); sp.set_defaults(fn=cmd_curve)
+    sp = sub.add_parser("spreads", parents=[common], help="спреды по ступеням рейтинга и бумаги с премией к соседям (шаги 2–3 алгоритма)"); screen_opts(sp)
+    sp.add_argument("--rating", help="только одна ступень, напр. BBB"); sp.add_argument("--top", type=int, default=40); sp.add_argument("--bottom", type=int, default=0)
+    sp.add_argument("--csv"); sp.set_defaults(fn=cmd_spreads)
     sp = sub.add_parser("keyrate", parents=[common], help="ключевая ставка ЦБ и фаза цикла"); sp.set_defaults(fn=cmd_keyrate)
     sp = sub.add_parser("bond", parents=[common], help="карточка облигации"); sp.add_argument("secid"); sp.add_argument("--schedule", action="store_true"); sp.set_defaults(fn=cmd_bond)
     sp = sub.add_parser("strategies", parents=[common], help="список стратегий"); sp.set_defaults(fn=cmd_strategies)

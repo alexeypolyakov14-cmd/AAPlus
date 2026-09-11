@@ -57,16 +57,31 @@ class ValueHYStrategy(Strategy):
     def __init__(self, top_n: int = 30, w_spread: float = 0.40, w_fin: float = 0.35, w_ret: float = 0.25, w_news: float = 0.15,
                  lgd: float = 0.6, horizon: float = 1.0, slippage_bp: float = 25.0, max_duration: float = 2.5,
                  ofz_min_share: float = 0.10, min_coverage: float = 1.5, hard_stops: bool = True,
-                 min_composite: float = -10.0, fin_required: bool = False):
+                 min_composite: float = -10.0, fin_required: bool = False, max_rating: str = "", include_unrated: bool = True,
+                 min_spread_bp: float = 0.0):
         self.top_n = top_n
         self.w_spread, self.w_fin, self.w_ret, self.w_news = w_spread, w_fin, w_ret, w_news
         self.lgd, self.horizon, self.slippage_bp = lgd, horizon, slippage_bp
         self.max_duration, self.ofz_min_share = max_duration, ofz_min_share
         self.min_coverage, self.hard_stops, self.min_composite = min_coverage, hard_stops, min_composite
         self.fin_required = fin_required
+        # вселенная кандидатов (ВДО): рейтинг не лучше max_rating; модель справедливого спреда при этом
+        # обучается на всём корпоративном срезе, иначе «справедливый» спред BBB нечем откалибровать
+        self.max_rating, self.include_unrated, self.min_spread_bp = max_rating, include_unrated, min_spread_bp
         self._reasons: dict[str, str] = {}
         self.model = None
         self.components: dict[str, dict[str, float]] = {}
+
+    def is_candidate(self, r) -> bool:
+        from ..data.ratings import rating_at_least
+        if self.min_spread_bp > 0 and (r.metrics.g_spread is None or r.metrics.g_spread < self.min_spread_bp):
+            return False
+        if not self.max_rating:
+            return True
+        if r.rating is None:
+            return self.include_unrated
+        cap = self.max_rating.upper()
+        return not rating_at_least(r.rating.rating, cap) or r.rating.rating == cap
 
     # ---- компоненты ----
     def stop_reason(self, r) -> Optional[str]:
@@ -87,8 +102,9 @@ class ValueHYStrategy(Strategy):
         return None
 
     def compute(self, ctx: MarketContext) -> dict[str, dict[str, float]]:
-        corp = [r for r in ctx.rows if not r.bond.is_ofz and not r.bond.is_floater and r.metrics.macaulay_duration <= self.max_duration]
-        self.model = fit_fair_spread(corp)
+        universe = [r for r in ctx.rows if not r.bond.is_ofz and not r.bond.is_floater]
+        self.model = fit_fair_spread(universe)
+        corp = [r for r in universe if r.metrics.macaulay_duration <= self.max_duration and self.is_candidate(r)]
         spread: dict[str, float] = {}
         fin: dict[str, float] = {}
         ret: dict[str, float] = {}
