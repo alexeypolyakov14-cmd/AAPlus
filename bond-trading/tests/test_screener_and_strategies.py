@@ -269,6 +269,6 @@ def test_peer_group_widening():
     ps = peer_stats(uni[0], uni, min_peers=2, same_sector=False, dur_window=1.0)
     assert ps.n == 2 and ps.median == 1050 and ps.excess == 450 and ps.pct_rank == 1.0 and ps.widened == 0 and ps.group == "BB-, дюрация 0.5–2.5"
     ps = peer_stats(uni[0], uni, min_peers=4, dur_window=1.0)
-    assert ps.n == 4 and ps.group.startswith("BB+…B+") and ps.widened == 2   # ±1 ступень: P1, P2, Q1, Q2
+    assert ps.n == 4 and ps.group == "BB…B+" and ps.widened == 3          # ±1 ступень + без окна дюрации: P1, P2, Q1, F1
     ps = peer_stats(uni[6], uni, min_peers=1)
     assert ps.n == 1 and ps.group == "без рейтинга, дюрация 0.5–2.5" and ps.excess == -50
