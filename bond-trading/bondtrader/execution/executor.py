@@ -14,6 +14,7 @@ from .base import Broker, OrderReport
 
 @dataclass
 class ExecutionReport:
+    cancelled: int = 0
     reports: list[OrderReport] = field(default_factory=list)
     violations: list[Violation] = field(default_factory=list)
     aborted: bool = False
@@ -28,11 +29,13 @@ class ExecutionReport:
 
 
 class Executor:
-    def __init__(self, broker: Broker, risk: RiskManager, journal_path: str = "state/orders.jsonl", dry_run: bool = True):
+    def __init__(self, broker: Broker, risk: RiskManager, journal_path: str = "state/orders.jsonl", dry_run: bool = True,
+                 cancel_open: bool = True):
         self.broker = broker
         self.risk = risk
         self.journal_path = journal_path
         self.dry_run = dry_run
+        self.cancel_open = cancel_open   # перед ребалансировкой снять старые активные заявки (иначе двойной объём)
 
     def _journal(self, rec: dict) -> None:
         os.makedirs(os.path.dirname(self.journal_path) or ".", exist_ok=True)
@@ -49,6 +52,15 @@ class Executor:
             rep.aborted = True
             self._journal({"event": "abort", "violations": [v.message for v in rep.violations if v.hard]})
             return rep
+        if not self.dry_run and self.cancel_open:
+            try:
+                n = self.broker.cancel_all()
+            except Exception as e:  # noqa: BLE001
+                n = 0
+                self._journal({"event": "cancel_failed", "error": str(e)})
+            rep.cancelled = n
+            if n:
+                self._journal({"event": "cancel_open_orders", "count": n})
         for o in orders:
             row = rows[o.secid]
             if self.dry_run:

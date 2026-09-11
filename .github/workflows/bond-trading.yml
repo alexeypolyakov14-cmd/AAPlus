@@ -11,6 +11,11 @@ on:
         type: choice
         default: carry
         options: [carry, value_hy, ladder, rate_cycle, spread]
+      profile:
+        description: "Профиль настроек для песочницы"
+        type: choice
+        default: default
+        options: [default, moderate, hy]
       execute:
         description: "Реально отправить ордера в песочницу (иначе только dry-run)"
         type: boolean
@@ -125,6 +130,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     env:
       TINVEST_TOKEN: ${{ secrets.TINVEST_TOKEN }}
+      BONDTRADER_CONFIG: ${{ inputs.profile == 'default' && 'config.yaml' || format('configs/{0}.yaml', inputs.profile) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

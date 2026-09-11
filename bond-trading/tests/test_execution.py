@@ -109,6 +109,12 @@ def test_tinvest_broker_with_fake_transport(rows):
     assert br.cash() == pytest.approx(100000.5)
     assert br.positions() == {"SU26238RMFS4": 10}
     assert br.cancel_all() == 1
+    # лимитная цена: покупка по аску с запасом, продажа по биду; без стакана — последняя цена
+    from bondtrader.models import Quote as _Q
+    q = _Q("X", row.quote.trade_date, price=100.0, bid=99.5, ask=100.5)
+    assert TInvestBroker.limit_price(Order("X", "BUY", 1, 100.0), q) == pytest.approx(100.65)
+    assert TInvestBroker.limit_price(Order("X", "SELL", 1, 100.0), q) == pytest.approx(99.35)
+    assert TInvestBroker.limit_price(Order("X", "BUY", 1, 100.0), _Q("X", row.quote.trade_date, price=100.0)) == pytest.approx(100.15)
     # запасной путь: бумага не найдена по тикеру -> FindInstrument по ISIN
     from bondtrader.models import Bond as _B
     other = _B(secid="RU000A1XXXXX", isin="RU000A1XXXXX", board="TQCB")

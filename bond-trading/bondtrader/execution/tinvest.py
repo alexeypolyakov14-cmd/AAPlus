@@ -241,9 +241,10 @@ class TInvestBroker:
             "account_id": self.account_id(),
             "order_id": str(uuid.uuid4()),
         }
-        if order.price:
+        price = self.limit_price(order, quote)
+        if price:
             body["order_type"] = "ORDER_TYPE_LIMIT"
-            body["price"] = to_quotation(round(order.price, 4))
+            body["price"] = to_quotation(round(price, 4))
         else:
             body["order_type"] = "ORDER_TYPE_BESTPRICE"
         try:
@@ -256,6 +257,17 @@ class TInvestBroker:
         commission = from_quotation(g(r, "executed_commission")) if g(r, "executed_commission") else 0.0
         return OrderReport(order, status, broker_order_id=g(r, "order_id", default="") or "", filled_qty=filled_lots * lot,
                            fill_price=avg if avg else None, commission=commission, message=r.get("message", ""))
+
+    @staticmethod
+    def limit_price(order: Order, quote: Quote, cushion_pct: float = 0.15) -> Optional[float]:
+        """Цена лимитной заявки: покупка — по аску, продажа — по биду (плюс небольшой запас в %), иначе
+        заявка по последней цене висит неисполненной. Без стакана — последняя цена с тем же запасом."""
+        base = order.price
+        if order.side == "BUY":
+            ref = quote.ask or base
+            return round(ref * (1 + cushion_pct / 100), 2) if ref else None
+        ref = quote.bid or base
+        return round(ref * (1 - cushion_pct / 100), 2) if ref else None
 
     def open_orders(self) -> list[dict]:
         return self.call("OrdersService/GetOrders", {"account_id": self.account_id()}).get("orders", [])

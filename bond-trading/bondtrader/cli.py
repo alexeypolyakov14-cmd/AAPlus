@@ -250,14 +250,16 @@ def cmd_trade(args, settings):
         if input("Введите YES для подтверждения: ").strip() != "YES":
             print("отменено")
             return
-    ex = Executor(broker, risk, settings.get("execution", "journal_path", default="state/orders.jsonl"), dry_run=dry)
+    ex = Executor(broker, risk, settings.get("execution", "journal_path", default="state/orders.jsonl"), dry_run=dry,
+                  cancel_open=not getattr(args, "keep_orders", False))
     rep = ex.run(orders, by_id, pf)
     if rep.aborted:
         print("\nИсполнение остановлено риск-контролем:")
         for v in rep.violations:
             print(f"  [{'!' if v.hard else '~'}] {v.message}")
         return
-    print(f"\nРежим: {'DRY-RUN (ничего не отправлено; добавьте --confirm)' if dry else broker.name}")
+    print(f"\nРежим: {'DRY-RUN (ничего не отправлено; добавьте --confirm)' if dry else broker.name}"
+          + (f"; снято старых заявок: {rep.cancelled}" if rep.cancelled else ""))
     print(pd.DataFrame([{"secid": r.order.secid, "side": r.order.side, "qty": r.order.qty, "status": r.status,
                          "fill_price": r.fill_price, "commission": round(r.commission, 2), "msg": r.message} for r in rep.reports]).to_string(index=False))
 
@@ -701,6 +703,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("signals", parents=[common], help="целевой портфель и ордера по стратегии"); screen_opts(sp); strat_opts(sp)
     sp.add_argument("--broker", choices=["paper", "tinvest"]); sp.add_argument("--csv"); sp.set_defaults(fn=cmd_signals)
     sp = sub.add_parser("trade", parents=[common], help="исполнить ребалансировку через брокера"); screen_opts(sp); strat_opts(sp)
+    sp.add_argument("--keep-orders", action="store_true", help="не снимать старые активные заявки перед ребалансировкой")
     sp.add_argument("--broker", choices=["paper", "tinvest"]); sp.add_argument("--confirm", action="store_true", help="реально отправить ордера (иначе dry-run)")
     sp.add_argument("--live", action="store_true", help="боевой контур T-Invest вместо песочницы"); sp.set_defaults(fn=cmd_trade)
     sp = sub.add_parser("portfolio", parents=[common], help="состояние портфеля и риск-метрики"); screen_opts(sp)
