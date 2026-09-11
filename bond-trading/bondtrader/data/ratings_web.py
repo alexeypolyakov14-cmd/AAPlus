@@ -502,6 +502,7 @@ def load_acra_press(max_pages: int = 120) -> list[Rating]:
     Останавливается, когда новых записей нет."""
     out: list[Rating] = []
     seen: set[tuple] = set()
+    seen_links: set[str] = set()
     withdrawn: set[str] = set()
     for page in range(1, max_pages + 1):
         url = CANDIDATES["acra_press"] + (f"?PAGEN_1={page}" if page > 1 else "")
@@ -512,10 +513,13 @@ def load_acra_press(max_pages: int = 120) -> list[Rating]:
             break
         if code != 200:
             break
+        # конец списка — когда на странице нет ни одного нового релиза (рейтинговых действий там лишь ~10–15%)
+        links = set(re.findall(r'class="item__title"[^>]*href="([^"]+)"', text))
+        if not links or links <= seen_links:
+            break
+        seen_links |= links
         got = parse_acra_press(text, withdrawn)
         new = [r for r in got if (r.subject, r.rating, r.date, r.kind) not in seen]
-        if not new:
-            break
         for r in new:
             seen.add((r.subject, r.rating, r.date, r.kind))
         out.extend(new)
