@@ -17,7 +17,7 @@ CHUNK = 3900
 
 def telegram_whoami(token: Optional[str] = None, timeout: float = 20) -> list[dict]:
     """Кто писал боту: [{chat_id, name, type, last_text}] — чтобы узнать TELEGRAM_CHAT_ID. Токен не печатается."""
-    token = token or os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    token = (token or os.environ.get("TELEGRAM_BOT_TOKEN", "")).strip()   # секрет часто вставляют с пробелом/переводом строки
     if not token:
         raise RuntimeError("не задан TELEGRAM_BOT_TOKEN")
     me = requests.get(TG_ME.format(token=token), timeout=timeout).json()
@@ -44,8 +44,8 @@ def telegram_whoami(token: Optional[str] = None, timeout: float = 20) -> list[di
 
 def telegram_send(text: str, token: Optional[str] = None, chat_id: Optional[str] = None, timeout: float = 20) -> int:
     """Отправляет текст (при необходимости — несколькими сообщениями). Возвращает число отправленных сообщений."""
-    token = token or os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    chat_id = chat_id or os.environ.get("TELEGRAM_CHAT_ID", "")
+    token = (token or os.environ.get("TELEGRAM_BOT_TOKEN", "")).strip()
+    chat_id = (chat_id or os.environ.get("TELEGRAM_CHAT_ID", "")).strip()
     if not token or not chat_id:
         raise RuntimeError("не заданы TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID")
     parts = _split(text)
