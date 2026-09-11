@@ -165,11 +165,19 @@ def cmd_why(args, settings):
     """Все выпуски эмитента (поиск по названию/SECID/ISIN): прошёл ли сито, почему нет, проходит ли риск-лимиты и стратегию."""
     from .analytics.bond_math import compute_metrics
     snap = load_snapshot(settings, args.fixtures)
-    q = args.query.strip().upper()
-    matches = [(b, qt) for b, qt in snap.universe
-               if q in (b.name or "").upper() or q in (b.full_name or "").upper() or b.secid.upper() == q or (b.isin or "").upper() == q]
+    qs = [x.strip().upper() for x in args.query.replace("|", ",").split(",") if x.strip()]
+
+    def hit(b) -> bool:
+        hay = f"{b.name or ''} {b.full_name or ''}".upper()
+        return any(q in hay or b.secid.upper() == q or (b.isin or "").upper() == q for q in qs)
+
+    matches = [(b, qt) for b, qt in snap.universe if hit(b)]
     if not matches:
-        raise SystemExit(f"«{args.query}»: ничего не найдено среди {len(snap.universe)} бумаг на площадках {settings.get('data', 'boards')}")
+        # подсказка: имена, начинающиеся с первых трёх букв запроса, — чтобы понять, как бумага называется на MOEX
+        stems = {q[:3] for q in qs if len(q) >= 3}
+        near = sorted({b.name for b, _ in snap.universe if any((b.name or "").upper().startswith(st) for st in stems)})[:40]
+        hint = f"\nПохожие названия на MOEX: {', '.join(near)}" if near else ""
+        raise SystemExit(f"«{args.query}»: ничего не найдено среди {len(snap.universe)} бумаг на площадках {settings.get('data', 'boards')}{hint}")
     _header(snap)
     rows = _screen(snap, settings, args)
     by_id = {r.secid: r for r in rows}
@@ -1074,7 +1082,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--tg-file", help="сохранить Telegram-версию (HTML) в файл")
     sp.set_defaults(fn=cmd_report)
     sp = sub.add_parser("why", parents=[common], help="выпуски эмитента: прошли ли сито, почему нет, проходят ли риск-лимиты и стратегию"); screen_opts(sp); strat_opts(sp)
-    sp.add_argument("query", help="часть названия (НЛМК), SECID или ISIN"); sp.set_defaults(fn=cmd_why)
+    sp.add_argument("query", help="часть названия (НЛМК), SECID или ISIN; несколько вариантов через запятую"); sp.set_defaults(fn=cmd_why)
     sp = sub.add_parser("notify", parents=[common], help="отправить текст/файл в Telegram"); sp.add_argument("--file"); sp.add_argument("--text")
     sp.add_argument("--whoami", action="store_true", help="показать chat_id тех, кто писал боту (для секрета TELEGRAM_CHAT_ID)")
     sp.add_argument("--html", action="store_true", help="файл уже в HTML-разметке Telegram (report --tg-file)")

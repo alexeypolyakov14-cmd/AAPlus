@@ -323,7 +323,9 @@ jobs:
             daily-books-
             credit-books-
       - name: Выпуски и статус в скрине
-        run: bondtrader why "$LOOKUP" | tee -a "$GITHUB_STEP_SUMMARY"
+        run: |
+          set -o pipefail
+          bondtrader why "$LOOKUP" | tee -a "$GITHUB_STEP_SUMMARY"
 
   sandbox:
     name: Песочница T-Invest (ручной запуск, нужен секрет TINVEST_TOKEN)

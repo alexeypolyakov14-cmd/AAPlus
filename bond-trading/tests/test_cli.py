@@ -94,12 +94,12 @@ def test_ratings_commands(capsys, cfg, tmp_path):
 
 def test_why_command(capsys):
     from bondtrader.cli import main
-    assert main(["--fixtures", FIX, "why", "ВИС"]) == 0
+    assert main(["--fixtures", FIX, "why", "ВИС, нет такого"]) == 0
     out = capsys.readouterr().out
     assert "ВИС Ф БП04" in out and "status" in out and "найдено" in out
     try:
-        main(["--fixtures", FIX, "why", "НЕТТАКОГО"])
+        main(["--fixtures", FIX, "why", "ВИСКОЗА"])
     except SystemExit as e:
-        assert "ничего не найдено" in str(e)
+        assert "ничего не найдено" in str(e) and "Похожие названия" in str(e) and "ВИС Ф БП04" in str(e)
     else:
         raise AssertionError("ожидался SystemExit")
