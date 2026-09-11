@@ -956,14 +956,14 @@ def cmd_spreads(args, settings):
                      "dur_med": round(statistics.median(r.metrics.macaulay_duration for r in rs), 1)})
     print("Спреды к кривой ОФЗ по ступеням рейтинга (б.п.):")
     print(pd.DataFrame(recs).to_string(index=False))
-    # --- остатки: за что платят больше внутри ступени ---
+    # --- остатки: за что платят больше внутри группы пиров (ступень рейтинга, при нехватке — расширяется) ---
+    from .analytics.peers import peer_stats
     out = []
     for r in corp:
         if args.rating and (r.rating.rating if r.rating else "—") != args.rating.upper():
             continue
         g = r.rating.rating if r.rating else "—"
-        peers = [x.metrics.g_spread for x in buckets[g]]
-        med = statistics.median(peers)
+        med = peer_stats(r, corp, min_peers=3, dur_window=None).median
         resid_model = model.residual(features_of(r), r.metrics.g_spread) if model.ok else float("nan")
         why = []
         if r.news is not None and r.news.n:
@@ -996,6 +996,48 @@ def cmd_spreads(args, settings):
     if args.bottom:
         print(f"\nЗа что платят меньше (топ {args.bottom}):")
         print(df.tail(args.bottom).iloc[::-1].to_string(index=False))
+
+
+def cmd_peers(args, settings):
+    """Группа пиров: кто похож на бумагу по рейтингу/сектору/дюрации и на сколько она платит больше них."""
+    from .analytics.peers import peer_stats, peer_table
+    snap = load_snapshot(settings, args.fixtures)
+    rows = _screen(snap, settings, args)
+    _header(snap)
+    corp = [r for r in rows if not r.bond.is_ofz and not r.bond.is_floater and r.metrics.g_spread is not None]
+    kw = dict(min_peers=args.min_peers, same_sector=args.sector, dur_window=(args.dur_window if args.dur_window > 0 else None))
+    if args.query:
+        qs = [x.strip().upper() for x in args.query.replace("|", ",").split(",") if x.strip()]
+        hits = [r for r in corp if any(q in f"{r.bond.name} {r.bond.full_name}".upper() or r.secid.upper() == q or (r.bond.isin or "").upper() == q for q in qs)]
+        if not hits:
+            raise SystemExit(f"«{args.query}»: нет в скрине (см. bondtrader why)")
+        for r in hits:
+            ps = peer_stats(r, corp, **kw)
+            print(f"\n{r.secid} {r.bond.name}: рейтинг {r.rating_str}, сектор {r.sector or 'other'}, дюрация {r.metrics.macaulay_duration:.1f}, "
+                  f"YTW {r.metrics.yield_worst:.1f}%, G-спред {r.metrics.g_spread:.0f} б.п.")
+            print(f"Пиры: {ps.group}, n={ps.n}, медиана {ps.median:.0f} (кварт. {ps.p25:.0f}–{ps.p75:.0f}); "
+                  f"превышение {ps.excess:+.0f} б.п., дороже {ps.pct_rank:.0%} похожих" + (f", группа расширена ({ps.widened})" if ps.widened else ""))
+            recs = [{"secid": x.secid, "name": x.bond.name, "rating": x.rating_str, "sector": x.sector, "dur": round(x.metrics.macaulay_duration, 1),
+                     "ytw": round(x.metrics.yield_worst, 1), "spread": round(x.metrics.g_spread), "turnover_mln": round(x.quote.turnover / 1e6, 1),
+                     "news": (f"{x.news.score:+.1f}" if x.news is not None and x.news.n else "")}
+                    for x in sorted(ps.peers, key=lambda x: -x.metrics.g_spread)]
+            print(pd.DataFrame(recs).to_string(index=False))
+        return
+    table = peer_table(corp, **kw)
+    by_id = {r.secid: r for r in corp}
+    recs = []
+    for s, ps in table.items():
+        r = by_id[s]
+        recs.append({"secid": s, "name": r.bond.name, "rating": r.rating_str, "sector": r.sector, "dur": round(r.metrics.macaulay_duration, 1),
+                     "ytw": round(r.metrics.yield_worst, 1), "spread": round(r.metrics.g_spread), "peers_med": round(ps.median), "excess": round(ps.excess),
+                     "pct_rank": round(ps.pct_rank, 2), "n": ps.n, "group": ps.group,
+                     "news": (f"{r.news.score:+.1f}" if r.news is not None and r.news.n else "")})
+    df = pd.DataFrame(recs).sort_values("excess", ascending=False)
+    if args.min_excess:
+        df = df[df["excess"] >= args.min_excess]
+    print(f"\nЗа что платят больше, чем за пиров (рейтинг{' + сектор' if args.sector else ''}{f', дюрация ±{args.dur_window:g}' if args.dur_window > 0 else ''}; "
+          f"мин. пиров {args.min_peers}); excess — к медиане пиров, pct_rank — доля пиров дешевле:")
+    _print_df(df.head(args.top), csv=args.csv)
 
 
 def cmd_strategies(args, settings):
@@ -1081,6 +1123,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--md", help="сохранить в файл"); sp.add_argument("--telegram", action="store_true", help="отправить в Telegram (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)")
     sp.add_argument("--tg-file", help="сохранить Telegram-версию (HTML) в файл")
     sp.set_defaults(fn=cmd_report)
+    sp = sub.add_parser("peers", parents=[common], help="группа пиров (рейтинг/сектор/дюрация): за что платят больше, чем за похожих"); screen_opts(sp)
+    sp.add_argument("query", nargs="?", help="бумага (часть названия/SECID/ISIN; несколько через запятую) — показать её пиров; без аргумента — топ по превышению")
+    sp.add_argument("--top", type=int, default=30); sp.add_argument("--min-excess", type=float, default=0.0, help="б.п.; показывать только превышение не меньше")
+    sp.add_argument("--min-peers", type=int, default=5); sp.add_argument("--sector", action="store_true", help="пиры только из того же сектора")
+    sp.add_argument("--dur-window", type=float, default=1.0, help="окно дюрации ± лет (0 — не ограничивать)"); sp.add_argument("--csv")
+    sp.set_defaults(fn=cmd_peers)
     sp = sub.add_parser("why", parents=[common], help="выпуски эмитента: прошли ли сито, почему нет, проходят ли риск-лимиты и стратегию"); screen_opts(sp); strat_opts(sp)
     sp.add_argument("query", help="часть названия (НЛМК), SECID или ISIN; несколько вариантов через запятую"); sp.set_defaults(fn=cmd_why)
     sp = sub.add_parser("notify", parents=[common], help="отправить текст/файл в Telegram"); sp.add_argument("--file"); sp.add_argument("--text")

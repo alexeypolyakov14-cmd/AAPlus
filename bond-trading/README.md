@@ -75,6 +75,10 @@ bondtrader portfolio --broker tinvest
 (токен от @BotFather), `TELEGRAM_CHAT_ID` (ваш чат; узнать: напишите боту `/start`, затем `bondtrader notify --whoami`).
 
 ```bash
+bondtrader peers --top 30                          # за что платят больше, чем за пиров (рейтинг ± сектор ± дюрация)
+bondtrader peers "БалтЛиз"                          # группа пиров конкретной бумаги: кто похож и на сколько она дороже
+bondtrader signals -s gspread -p rank=peers -p min_excess_bp=100 -p top_n=20   # отбор по превышению над пирами
+bondtrader why "НЛМК"                              # все выпуски эмитента и почему (не) в скрине
 bondtrader report --broker tinvest --telegram      # отчёт в чат: HTML-таблицы позиций/P&L, алерты, цель, новости + кнопки
 bondtrader bot --menu                              # прислать справку с кнопками и ответить на накопившиеся запросы
 bondtrader bot --broker tinvest --poll             # локально: long polling, ответы мгновенно
@@ -155,9 +159,9 @@ bond-trading/
 │   ├── report_tg.py         # секции отчёта для Telegram (HTML, <pre>-таблицы)
 │   ├── notify.py            # Telegram Bot API: sendMessage, getUpdates, клавиатуры
 │   ├── bot.py               # кнопки/команды бота: отчёт, позиции, новости, скрин, алерты
-│   ├── analytics/           # bond_math.py, curve.py, fair_spread.py
+│   ├── analytics/           # bond_math.py, curve.py, fair_spread.py, peers.py (группа пиров)
 │   ├── data/                # moex.py, cbr.py, cache.py, tls.py, ratings.py, ratings_web.py, financials.py, girbo.py, disclosure.py, news.py, sectors.py
-│   ├── strategies/          # base.py, ladder.py, spread.py, rate_cycle.py, carry.py, value_hy.py
+│   ├── strategies/          # base.py, ladder.py, spread.py, rate_cycle.py, carry.py, value_hy.py, gspread.py
 │   ├── backtest/            # engine.py, data.py, metrics.py
 │   └── execution/           # base.py, paper.py, tinvest.py, executor.py
 ├── tests/                   # pytest, офлайн на фикстурах формата MOEX ISS

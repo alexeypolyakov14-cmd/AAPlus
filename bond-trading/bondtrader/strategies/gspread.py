@@ -9,8 +9,6 @@ rank = "model"  — остаток к регрессии справедливо�
 """
 from __future__ import annotations
 
-import statistics
-
 from .base import MarketContext, Strategy
 
 
@@ -19,13 +17,15 @@ class GSpreadStrategy(Strategy):
     name = "gspread"
 
     def __init__(self, top_n: int = 10, per_issuer: int = 1, max_duration: float = 3.0, min_spread_bp: float = 0.0,
-                 ofz_min_share: float = 0.0, rank: str = "spread", min_excess_bp: float = 0.0, min_peers: int = 3):
+                 ofz_min_share: float = 0.0, rank: str = "spread", min_excess_bp: float = 0.0, min_peers: int = 5,
+                 same_sector: bool = False, dur_window: float = 1.0):
         self.top_n, self.per_issuer, self.max_duration = top_n, per_issuer, max_duration
         self.min_spread_bp, self.ofz_min_share = min_spread_bp, ofz_min_share
         self.rank, self.min_excess_bp, self.min_peers = rank, min_excess_bp, min_peers
+        self.same_sector, self.dur_window = same_sector, (dur_window if dur_window and dur_window > 0 else None)
         self._reasons: dict[str, str] = {}
         self.excess: dict[str, float] = {}     # секид -> превышение над соседями/моделью (б.п.)
-        self.peer_median: dict[str, float] = {}
+        self.peers: dict = {}                  # секид -> PeerStats (rank=peers)
 
     def _excess(self, universe: list) -> dict[str, float]:
         """Превышение спреда над ориентиром: медиана ступени (peers) или регрессия (model). Для spread — сам спред."""
@@ -34,17 +34,9 @@ class GSpreadStrategy(Strategy):
             model = fit_fair_spread(universe)
             return {r.secid: (model.residual(features_of(r), r.metrics.g_spread) if model.ok else r.metrics.g_spread) for r in universe}
         if self.rank == "peers":
-            buckets: dict[str, list[float]] = {}
-            for r in universe:
-                buckets.setdefault(r.rating.rating if r.rating else "—", []).append(r.metrics.g_spread)
-            self.peer_median = {g: statistics.median(v) for g, v in buckets.items()}
-            out = {}
-            for r in universe:
-                g = r.rating.rating if r.rating else "—"
-                # в ступени слишком мало бумаг — медиана не показательна, сравниваем с общей медианой корпоратов
-                med = self.peer_median[g] if len(buckets[g]) >= self.min_peers else statistics.median(x.metrics.g_spread for x in universe)
-                out[r.secid] = r.metrics.g_spread - med
-            return out
+            from ..analytics.peers import peer_table
+            self.peers = peer_table(universe, min_peers=self.min_peers, same_sector=self.same_sector, dur_window=self.dur_window)
+            return {s: ps.excess for s, ps in self.peers.items()}
         return {r.secid: r.metrics.g_spread for r in universe}
 
     def ranked(self, ctx: MarketContext) -> list:
@@ -78,8 +70,9 @@ class GSpreadStrategy(Strategy):
             base = (f"G-спред {m.g_spread:+.0f} б.п. (YTW {m.yield_worst:.1f}% при ОФЗ {m.yield_worst - m.g_spread / 100:.1f}% "
                     f"на дюрации {m.macaulay_duration:.1f}), рейтинг {r.rating_str}")
             if self.rank == "peers":
-                g = r.rating.rating if r.rating else "—"
-                base += f"; +{self.excess[r.secid]:.0f} б.п. к медиане ступени {g} ({self.peer_median.get(g, 0):.0f})"
+                ps = self.peers[r.secid]
+                base += (f"; {ps.excess:+.0f} б.п. к медиане пиров {ps.median:.0f} ({ps.group}, n={ps.n}), "
+                         f"дороже {ps.pct_rank:.0%} похожих")
             elif self.rank == "model":
                 base += f"; {self.excess[r.secid]:+.0f} б.п. к справедливому"
             self._reasons[r.secid] = base

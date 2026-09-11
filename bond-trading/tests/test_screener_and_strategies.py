@@ -242,9 +242,33 @@ def test_gspread_peers_ranking():
     rows = [row("A1", 500, "A"), row("A2", 600, "A"), row("A3", 900, "A"),        # A3 платит +300 к медиане A
             row("B1", 1500, "BB"), row("B2", 1550, "BB"), row("B3", 1400, "BB")]   # BB1..3 около медианы
     ctx = MarketContext(date(2025, 6, 2), rows, None, None, Portfolio(cash=1e6))
-    st = make_strategy("gspread", {"top_n": 2, "rank": "peers", "min_excess_bp": 0, "min_peers": 3, "per_issuer": 0})
+    st = make_strategy("gspread", {"top_n": 2, "rank": "peers", "min_excess_bp": 0, "min_peers": 2, "per_issuer": 0, "dur_window": 0})
     w = st.targets(ctx)
-    assert list(w) == ["A3", "B2"]                      # A3 (+300) выше B2 (+50), хотя сырой спред B2 втрое больше
-    assert "к медиане ступени A (600)" in st.explain(ctx)["A3"]
-    st2 = make_strategy("gspread", {"top_n": 5, "rank": "peers", "min_excess_bp": 50, "per_issuer": 0})
-    assert list(st2.targets(ctx)) == ["A3", "B2"]       # только те, кто платит больше соседей хотя бы на 50 б.п.
+    assert list(w) == ["A3", "B2"]                      # A3 (+350 к медиане A1/A2) выше B2 (+100), хотя сырой спред B2 втрое больше
+    assert "к медиане пиров 550 (A, n=2)" in st.explain(ctx)["A3"] and "дороже 100%" in st.explain(ctx)["A3"]
+    st2 = make_strategy("gspread", {"top_n": 5, "rank": "peers", "min_excess_bp": 150, "min_peers": 2, "per_issuer": 0, "dur_window": 0})
+    assert list(st2.targets(ctx)) == ["A3"]             # только те, кто платит больше соседей хотя бы на 150 б.п.
+
+
+def test_peer_group_widening():
+    from datetime import date
+    from bondtrader.analytics.peers import peer_stats
+    from bondtrader.data.ratings import Rating
+    from bondtrader.models import Bond, BondMetrics, Quote
+    from bondtrader.screener import ScreenRow
+
+    def row(secid, spread, rating, dur=1.5, sector="leasing"):
+        b = Bond(secid, name=secid)
+        q = Quote(secid, date(2025, 6, 2), price=100.0, turnover=5e6)
+        m = BondMetrics(secid, 100.0, 1000.0, 20.0, None, 20.0, dur, dur * 0.9, 0, 0.1, 1.5, 15, spread)
+        return ScreenRow(b, q, m, rating=Rating("x", "y", rating) if rating else None, sector=sector)
+    uni = [row("X", 1500, "BB-"), row("P1", 1000, "BB-"), row("P2", 1100, "BB-", sector="mfo"), row("Q1", 900, "BB"), row("Q2", 950, "BB+"),
+           row("F1", 800, "BB-", dur=4.0), row("U1", 700, None), row("U2", 750, None)]
+    ps = peer_stats(uni[0], uni, min_peers=2, same_sector=True, dur_window=1.0)
+    assert ps.n == 1 or ps.group.startswith("BB-")      # с сектором пиров мало (только P1) → расширение
+    ps = peer_stats(uni[0], uni, min_peers=2, same_sector=False, dur_window=1.0)
+    assert ps.n == 2 and ps.median == 1050 and ps.excess == 450 and ps.pct_rank == 1.0 and ps.widened == 0 and ps.group == "BB-, дюрация 0.5–2.5"
+    ps = peer_stats(uni[0], uni, min_peers=4, dur_window=1.0)
+    assert ps.n == 4 and ps.group.startswith("BB+…B+") and ps.widened == 2   # ±1 ступень: P1, P2, Q1, Q2
+    ps = peer_stats(uni[6], uni, min_peers=1)
+    assert ps.n == 1 and ps.group == "без рейтинга, дюрация 0.5–2.5" and ps.excess == -50
