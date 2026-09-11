@@ -12,6 +12,10 @@ on:
         description: "Ежедневный отчёт (новости, алерты, целевой портфель, Telegram)"
         type: boolean
         default: false
+      telegram_setup:
+        description: "Только показать chat_id тех, кто писал боту (для секрета TELEGRAM_CHAT_ID)"
+        type: boolean
+        default: false
       strategy:
         description: "Стратегия для песочницы"
         type: choice
@@ -131,6 +135,24 @@ jobs:
           bondtrader signals -s spread
       - name: Бэктест (короткий, явная вселенная ОФЗ)
         run: bondtrader backtest -s ladder --start 2024-01-10 --end 2024-12-30 --universe SU26207RMFS9,SU26224RMFS4,SU26238RMFS4,SU26244RMFS2 --rebalance monthly --trades -v
+
+  telegram-setup:
+    name: Telegram — chat_id
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.telegram_setup
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e .
+      - run: bondtrader notify --whoami
+      - name: Тестовое сообщение (если chat_id уже задан)
+        if: env.TELEGRAM_CHAT_ID != ''
+        run: bondtrader notify --text "bondtrader - уведомления настроены"
 
   daily:
     name: Ежедневный отчёт (расписание 10:40 МСК; профиль hy)
