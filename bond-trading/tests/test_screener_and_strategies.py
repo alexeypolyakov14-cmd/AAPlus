@@ -241,6 +241,8 @@ def test_issuer_key_keeps_numbers_in_names_and_drops_series():
     assert issuer_key_of_full("Селигдар GOLD01") == issuer_key_of_full("Селигдар GOLD03") == "СЕЛИГДАР"
     assert issuer_key_of_full("АЛИУМ01Р1") == issuer_key_of_full("АЛИУМ01Р2") == "АЛИУМ" and issuer_key_of_full("АБЗ-1 002Р-06") == "АБЗ-1"
     assert issuer_key_of_full("Т Плюс 001P-01") == "Т ПЛЮС" and issuer_key_of_full("Сегежа3P6R") == "СЕГЕЖА"
+    assert issuer_key_of_full("iКаршеринг Руссия 001P-03") == issuer_key_of_full("Каршеринг Руссия 001P-06") == "КАРШЕРИНГ РУССИЯ"
+    assert issuer_key_of_full("sГТЛК 2P-12") == "ГТЛК"
 
 
 def test_gspread_peers_ranking():
