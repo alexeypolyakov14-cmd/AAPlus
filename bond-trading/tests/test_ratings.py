@@ -264,3 +264,11 @@ def test_plus_sign_names():
     assert issuer_same("АО «ЭН+ ГИДРО»", "ЭН+ГИДРО 001РС-02") == 1.0
     assert issuer_same("ПАО «Т Плюс»", "Т Плюс 001P-01") == 1.0
     assert issuer_same("ПАО «Т Плюс»", "ЭН ПЛЮС ГИДРО 001РС-10") == 0
+
+
+def test_issuer_same_allows_one_extra_subject_word():
+    from bondtrader.data.ratings import issuer_same
+    assert 0 < issuer_same('ООО "АРЛИФТ ИНТЕРНЕШНЛ"', "Арлифт 001Р-02") < 1
+    assert issuer_same('ООО ПКО "АЙДИ КОЛЛЕКТ"', "АйДи Коллект 001P-09") == 1.0
+    assert issuer_same('АО "ГК "ПИОНЕР"', "Пионер-Лизинг БО8") == 0
+    assert issuer_same("ООО «СГ РУС»", "РусГидро БО-002Р-13") == 0

@@ -193,7 +193,7 @@ def _norm_name(s: str) -> str:
     return re.sub(r"[^a-zа-я0-9]", "", (s or "").lower().replace("ё", "е"))
 
 
-_LEGAL_RE = re.compile(r"\b(ооо|ао|пао|зао|оао|нао|ип|мкао|мфк|мкк|гк|ук|ик|лк|фк|нко|общество с ограниченной ответственностью|"
+_LEGAL_RE = re.compile(r"\b(ооо|ао|пао|зао|оао|нао|ип|мкао|мфк|мкк|пко|кпк|гк|ук|ик|лк|фк|нко|общество с ограниченной ответственностью|"
                        r"публичное акционерное общество|акционерное общество|закрытое акционерное общество|"
                        r"limited|llc|plc|ltd|jsc|pjsc|ojsc|компани\w*|корпорац\w*|групп\w*|холдинг\w*|финанс\w*|инвест\w*|капитал\w*)\b")
 _STOP = {"бо", "бо-п", "пбо", "боп", "по", "зо", "серии", "серия", "выпуск", "выпуска", "облигаций", "облигации", "биржевых", "биржевые", "и"}
@@ -267,10 +267,15 @@ def issuer_same(subject: str, full_name: str) -> float:
     mf = [f for f in ft if any(_tok_eq(t, f) for t in st)]
     if not ms or all(_GENERIC_RE.match(t) for t in ms):
         return 0.0
-    if any(t not in ms and not _GENERIC_RE.match(t) for t in st):
-        return 0.0
+    # имя выпуска должно быть покрыто целиком: «Совкомбанк Лизинг» ≠ «Совкомбанк»
     if any(f not in mf and not _GENERIC_RE.match(f) for f in ft):
         return 0.0
+    extra = [t for t in st if t not in ms and not _GENERIC_RE.match(t)]
+    if extra:
+        # субъект длиннее краткого имени MOEX («Арлифт» ↔ «Арлифт Интернешнл»): допускаем одно лишнее слово,
+        # если совпавшее слово длинное и характерное; оценка ниже полной, точный субъект всегда выиграет
+        if len(extra) > 1 or max(len(t) for t in ms) < 6:
+            return 0.0
     return (len(ms) + len(mf)) / (len(st) + len(ft))
 
 
