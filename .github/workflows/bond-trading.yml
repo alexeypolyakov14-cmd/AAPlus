@@ -61,12 +61,17 @@ jobs:
       - name: Разведка сайтов рейтинговых агентств (структура страниц)
         continue-on-error: true
         run: bondtrader ratings discover
-      - name: Рейтинги НКР -> data/ratings.csv, покрытие скрина
+      - name: Рейтинги НКР + Эксперт РА -> data/ratings.csv, покрытие скрина
         continue-on-error: true
         run: |
-          bondtrader ratings fetch --pages 5
-          bondtrader ratings list | head -40
-          bondtrader ratings coverage | head -60
+          bondtrader ratings fetch -v 2>&1 | grep -v DEBUG
+          bondtrader ratings coverage | head -70
+          bondtrader -c configs/hy.yaml screen --top 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ratings-csv
+          path: bond-trading/data/ratings.csv
+          if-no-files-found: ignore
       - name: Сигналы стратегий
         run: |
           bondtrader signals -s carry

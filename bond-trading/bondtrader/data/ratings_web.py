@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 CANDIDATES = {
     "acra_issuers": "https://www.acra-ratings.ru/ratings/issuers/",
     "acra_issues": "https://www.acra-ratings.ru/ratings/issues/",
-    "acra_http": "http://www.acra-ratings.ru/ratings/issuers/",
+    "acra_emissions": "https://www.acra-ratings.ru/ratings/emissions/",
     "raexpert_credits_all": "https://raexpert.ru/ratings/credits_all/",
     "raexpert_bankcredit_all": "https://raexpert.ru/ratings/bankcredit_all/",
     "raexpert_debt_inst": "https://raexpert.ru/ratings/debt_inst/",
@@ -205,19 +205,32 @@ def _header_map(text: str) -> dict[str, int]:
     cols = [c.lower() for c in _cells(head)]
     idx: dict[str, int] = {}
     for i, c in enumerate(cols):
-        if "рейтингуемое" in c or c.startswith("наименование") and "эмисси" not in c:
+        if "рейтингуемое" in c or c.startswith("объект") or (c.startswith("наименование") and "эмисси" not in c):
             idx.setdefault("subject", i)
         elif "эмисси" in c:
             idx["issue"] = i
+            idx.setdefault("subject", i)   # эмитент извлекается из ссылки внутри ячейки
         elif c.startswith("рейтинг") and "esg" not in c:
             idx.setdefault("rating", i)
         elif c == "isin":
             idx["isin"] = i
-        elif c.startswith("дата"):
+        elif c.startswith("дата") or c.startswith("обновл"):
             idx["date"] = i
         elif "прогноз" in c:
             idx["outlook"] = i
     return idx
+
+
+_COMPANY_LINK_RE = re.compile(r"""<a[^>]+href=["'][^"']*/database/companies/[^"']*["'][^>]*>(.*?)</a>""", re.S | re.I)
+_ISSUER_LINK_RE = re.compile(r"""<a[^>]+href=["'][^"']*/ratings/issuers/[^"']*["'][^>]*>(.*?)</a>""", re.S | re.I)
+
+
+def _issuer_from_cell(cell_html: str) -> str:
+    for rx in (_COMPANY_LINK_RE, _ISSUER_LINK_RE):
+        m = rx.search(cell_html)
+        if m:
+            return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", m.group(1)))).strip()
+    return ""
 
 
 def parse_table_with_header(text: str, agency: str, kind: str) -> list[Rating]:
@@ -228,12 +241,21 @@ def parse_table_with_header(text: str, agency: str, kind: str) -> list[Rating]:
     body = re.search(r"<tbody.*?</tbody>", text, re.S | re.I)
     for row in _ROW_RE.findall(body.group(0) if body else text):
         cells = _cells(row)
+        raw_cells = _CELL_RE.findall(row)
         if len(cells) <= max(idx["rating"], idx["subject"]):
             continue
         rating = normalize_rating(cells[idx["rating"]])
         if not rating:
             continue
         subject = cells[idx["subject"]]
+        if "issue" in idx and idx["issue"] < len(raw_cells):
+            issuer = _issuer_from_cell(raw_cells[idx["issue"]])
+            if issuer:
+                subject = issuer
+        elif idx["subject"] < len(raw_cells):
+            issuer = _issuer_from_cell(raw_cells[idx["subject"]])
+            if issuer:
+                subject = issuer
         isin = ""
         if "isin" in idx and idx["isin"] < len(cells):
             m = _ISIN_RE.search(cells[idx["isin"]])
@@ -262,4 +284,43 @@ def load_nkr_tables() -> list[Rating]:
             got = parse_table_with_header(text, "НКР", kind)
             log.info("НКР %s: %d записей", key, len(got))
             out.extend(got)
+    return out
+
+
+# ---- Эксперт РА: списки рейтингов по разделам (HTML-таблицы, пагинация ?page=N) ----
+RAEXPERT_SECTIONS = {
+    "credits_all": ("issuer", "https://raexpert.ru/ratings/credits_all/"),
+    "credits_fin": ("issuer", "https://raexpert.ru/ratings/credits_fin/"),
+    "credits_holding": ("issuer", "https://raexpert.ru/ratings/credits_holding/"),
+    "credits_project": ("issuer", "https://raexpert.ru/ratings/credits_project/"),
+    "bankcredit_all": ("issuer", "https://raexpert.ru/ratings/bankcredit_all/"),
+    "leasing_rel": ("issuer", "https://raexpert.ru/ratings/leasing_rel/"),
+    "mfi_credits_all": ("issuer", "https://raexpert.ru/ratings/mfi_credits_all/"),
+    "debt_inst": ("issue", "https://raexpert.ru/ratings/debt_inst/"),
+}
+
+
+def load_raexpert(max_pages: int = 60) -> list[Rating]:
+    out: list[Rating] = []
+    for key, (kind, url) in RAEXPERT_SECTIONS.items():
+        seen: set[tuple] = set()
+        n_section = 0
+        for page in range(1, max_pages + 1):
+            u = url if page == 1 else f"{url}?page={page}"
+            try:
+                code, _, text = fetch(u)
+            except Exception as e:  # noqa: BLE001
+                log.warning("Эксперт РА %s: %s", u, e)
+                break
+            if code != 200:
+                break
+            got = parse_table_with_header(text, "Эксперт РА", kind)
+            new = [r for r in got if (r.subject, r.rating, r.date) not in seen]
+            if not new:
+                break
+            for r in new:
+                seen.add((r.subject, r.rating, r.date))
+            out.extend(new)
+            n_section += len(new)
+        log.info("Эксперт РА %s: %d записей", key, n_section)
     return out

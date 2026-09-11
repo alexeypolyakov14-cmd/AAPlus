@@ -105,7 +105,7 @@ class RatingsBook:
             self.by_emitter.setdefault(str(r.emitter_id), []).append(r)
         if r.alias:
             self.by_alias.append((_norm_name(r.alias), r))
-        if r.kind == "issuer" and r.subject:
+        if r.subject and (r.kind == "issuer" or not r.isin):
             self.by_subject.setdefault(r.subject, []).append(r)
 
     def __len__(self) -> int:
@@ -203,14 +203,26 @@ def issuer_tokens(name: str) -> list[str]:
     return toks
 
 
+_GENERIC_RE = re.compile(r"^(государствен|коммерческ|российск|национальн|федеральн|объединенн|публичн|акционерн|"
+                         r"микрофинансов|лизингов|страхов|инвестиционн|управляющ|специализирован|торгов|производствен|"
+                         r"промышленн|научн|транспортн|строительн|девелоп)")
+
+
 def issuer_match(subject: str, full_name: str) -> bool:
-    """Все существенные слова названия эмитента из рейтинга встречаются в полном имени выпуска MOEX."""
+    """Существенные слова названия эмитента из рейтинга встречаются в полном имени выпуска MOEX.
+
+    Сначала требуем совпадения всех слов; если не вышло — убираем общие прилагательные
+    («государственная», «российская», …) и проверяем оставшиеся.
+    """
     st = issuer_tokens(subject)
     ft = set(issuer_tokens(full_name))
     if not st or not ft:
         return False
-    # допускаем усечения: «Балтийский лизинг» vs «Балт. лизинг» — сравниваем по префиксам из 5 букв
+    # допускаем усечения: «Балтийский лизинг» vs «Балт. лизинг» — сравниваем по префиксам из 6 букв
     def key(t: str) -> str:
         return t[:6]
     fk = {key(t) for t in ft}
-    return all(key(t) in fk for t in st)
+    if all(key(t) in fk for t in st):
+        return True
+    core = [t for t in st if not _GENERIC_RE.match(t)]
+    return bool(core) and len(core) < len(st) and all(key(t) in fk for t in core)

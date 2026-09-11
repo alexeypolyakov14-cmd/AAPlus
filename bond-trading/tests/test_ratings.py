@@ -138,3 +138,20 @@ def test_parse_nkr_tables_with_header():
     assert rs[0].isin == "RU000A10EPW2" and rs[0].rating == "A-" and rs[0].kind == "issue" and "Брусника" in rs[0].subject
     book = RatingsBook(rs)
     assert book.lookup(Bond(secid="RU000A10EPW2", name="Брус 2Р07", isin="RU000A10EPW2")).rating == "A-"
+
+
+def test_parse_raexpert_tables():
+    from bondtrader.data.ratings_web import parse_table_with_header
+    credits = """<table><thead><tr><th> Объект </th><th> Рейтинг </th><th> Прогноз </th><th> Обновлен </th></tr></thead>
+    <tr><td><span><a href="/database/companies/1000066857">МКАО "ВОКСИС"</a></span><span> ruBBB+, Стабильный, <a href="/releases/2026/sep10a">10.09.2026</a></span></td><td>ruBBB+</td><td>Стабильный</td><td><a href="/releases/2026/sep10a">10.09.2026</a></td></tr>
+    <tr><td><span><a href="/database/companies/2">ООО "АЭРОФЬЮЭЛЗ ГРУПП"</a></span></td><td>ruA</td><td>Стабильный</td><td>10.09.2026</td></tr>
+    <tr><td><a href="/database/companies/3">ООО "Отозванный"</a></td><td>отозван</td><td>&#8212;</td><td>01.09.2026</td></tr></table>"""
+    rs = parse_table_with_header(credits, "Эксперт РА", "issuer")
+    assert [(r.subject, r.rating) for r in rs] == [('МКАО "ВОКСИС"', "BBB+"), ('ООО "АЭРОФЬЮЭЛЗ ГРУПП"', "A")]
+    assert rs[0].date == date(2026, 9, 10)
+    debt = """<table><thead><tr><th> Эмиссия </th><th> Рейтинг </th><th> Прогноз </th><th> Обновлен </th></tr></thead>
+    <tr><td><span><a href="/database/securities/bonds/1">Облигации Автодор серии БO-004P-01</a></span><br><a href="/database/companies/19292">ГОСУДАРСТВЕННАЯ КОМПАНИЯ "АВТОДОР"</a></td><td>ruAA+</td><td>&#8212;</td><td>09.09.2026</td></tr></table>"""
+    rs = parse_table_with_header(debt, "Эксперт РА", "issue")
+    assert rs[0].subject == 'ГОСУДАРСТВЕННАЯ КОМПАНИЯ "АВТОДОР"' and rs[0].rating == "AA+" and rs[0].kind == "issue"
+    book = RatingsBook(rs)
+    assert book.lookup(Bond(secid="X", name="Автодор4Р1", full_name="Автодор ГК БО-004P-01")).rating == "AA+"

@@ -353,14 +353,18 @@ def cmd_ratings(args, settings):
         discover(args.names)
         return
     if args.action == "fetch":
-        from .data.ratings_web import load_nkr, load_nkr_tables
+        from .data.ratings_web import load_nkr, load_nkr_tables, load_raexpert
         path = settings.get("data", "ratings_csv", default="data/ratings.csv")
         book = RatingsBook.from_csv(path)
         before = len(book)
-        # актуальное состояние — таблицы эмитентов/эмиссий; пресс-релизы только по запросу
-        got = load_nkr_tables()
-        if args.press:
-            got += load_nkr(pages=args.pages)
+        got: list = []
+        sources = args.sources or ["nkr", "raexpert"]
+        if "nkr" in sources:
+            got += load_nkr_tables()           # актуальное состояние — таблицы эмитентов/эмиссий
+            if args.press:
+                got += load_nkr(pages=args.pages)
+        if "raexpert" in sources:
+            got += load_raexpert()
         seen = {(r.subject, r.agency, r.kind, r.isin, r.date) for r in book.all}
         added = 0
         for r in got:
@@ -368,7 +372,10 @@ def cmd_ratings(args, settings):
             if key not in seen:
                 book.add(r); seen.add(key); added += 1
         book.to_csv(path)
-        print(f"НКР: добавлено {added} записей, всего {len(book)} -> {path}")
+        by_agency = {}
+        for r in book.all:
+            by_agency[r.agency] = by_agency.get(r.agency, 0) + 1
+        print(f"Добавлено {added} записей, всего {len(book)} -> {path}; по агентствам: {by_agency}")
         return
     book = RatingsBook.from_csv(settings.get("data", "ratings_csv", default="data/ratings.csv"))
     if args.action == "show":
@@ -444,7 +451,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("action", choices=["list", "show", "coverage", "discover", "fetch"]); sp.add_argument("secid", nargs="?")
     sp.add_argument("--names", nargs="*", help="для discover: какие источники смотреть")
     sp.add_argument("--pages", type=int, default=3, help="для fetch --press: сколько страниц пресс-релизов НКР")
-    sp.add_argument("--press", action="store_true", help="для fetch: дополнительно разобрать пресс-релизы НКР"); screen_opts(sp); sp.set_defaults(fn=cmd_ratings)
+    sp.add_argument("--press", action="store_true", help="для fetch: дополнительно разобрать пресс-релизы НКР")
+    sp.add_argument("--sources", nargs="*", choices=["nkr", "raexpert"], help="для fetch: источники (по умолчанию все)"); screen_opts(sp); sp.set_defaults(fn=cmd_ratings)
     sp = sub.add_parser("signals", parents=[common], help="целевой портфель и ордера по стратегии"); screen_opts(sp); strat_opts(sp)
     sp.add_argument("--broker", choices=["paper", "tinvest"]); sp.add_argument("--csv"); sp.set_defaults(fn=cmd_signals)
     sp = sub.add_parser("trade", parents=[common], help="исполнить ребалансировку через брокера"); screen_opts(sp); strat_opts(sp)
