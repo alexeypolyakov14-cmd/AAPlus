@@ -199,7 +199,13 @@ def issuer_tokens(name: str) -> list[str]:
     s = (name or "").lower().replace("ё", "е")
     s = re.sub(r"[«»\"'().,;:/\\-]", " ", s)
     s = _LEGAL_RE.sub(" ", s)
-    toks = [t for t in re.split(r"\s+", s) if len(t) >= 3 and t not in _STOP and not re.search(r"[0-9]", t)]
+    toks = []
+    for t in re.split(r"\s+", s):
+        # маркеры MOEX: «i» — сектор инноваций, «s» — устойчивое развитие (iКаршеринг, sГТЛК)
+        if len(t) >= 2 and t[0] in ("i", "s") and re.match(r"[а-я]", t[1]):
+            t = t[1:]
+        if len(t) >= 3 and t not in _STOP and not re.search(r"[0-9]", t):
+            toks.append(t)
     return toks
 
 

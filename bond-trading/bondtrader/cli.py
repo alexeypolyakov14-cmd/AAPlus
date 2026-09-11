@@ -356,18 +356,20 @@ def cmd_ratings(args, settings):
             discover(args.names)
         return
     if args.action == "fetch":
-        from .data.ratings_web import load_nkr, load_nkr_tables, load_raexpert
+        from .data.ratings_web import load_acra_press, load_nkr, load_nkr_tables, load_raexpert
         path = settings.get("data", "ratings_csv", default="data/ratings.csv")
         book = RatingsBook.from_csv(path)
         before = len(book)
         got: list = []
-        sources = args.sources or ["nkr", "raexpert"]
+        sources = args.sources or ["nkr", "raexpert", "acra"]
         if "nkr" in sources:
             got += load_nkr_tables()           # актуальное состояние — таблицы эмитентов/эмиссий
             if args.press:
                 got += load_nkr(pages=args.pages)
         if "raexpert" in sources:
             got += load_raexpert()
+        if "acra" in sources:
+            got += load_acra_press(max_pages=args.pages if args.pages > 3 else 40)
         seen = {(r.subject, r.agency, r.kind, r.isin, r.date) for r in book.all}
         added = 0
         for r in got:
@@ -457,7 +459,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--deep", action="store_true", help="для discover: формы, пагинация, ajax")
     sp.add_argument("--pages", type=int, default=3, help="для fetch --press: сколько страниц пресс-релизов НКР")
     sp.add_argument("--press", action="store_true", help="для fetch: дополнительно разобрать пресс-релизы НКР")
-    sp.add_argument("--sources", nargs="*", choices=["nkr", "raexpert"], help="для fetch: источники (по умолчанию все)"); screen_opts(sp); sp.set_defaults(fn=cmd_ratings)
+    sp.add_argument("--sources", nargs="*", choices=["nkr", "raexpert", "acra"], help="для fetch: источники (по умолчанию все)"); screen_opts(sp); sp.set_defaults(fn=cmd_ratings)
     sp = sub.add_parser("signals", parents=[common], help="целевой портфель и ордера по стратегии"); screen_opts(sp); strat_opts(sp)
     sp.add_argument("--broker", choices=["paper", "tinvest"]); sp.add_argument("--csv"); sp.set_defaults(fn=cmd_signals)
     sp = sub.add_parser("trade", parents=[common], help="исполнить ребалансировку через брокера"); screen_opts(sp); strat_opts(sp)

@@ -185,3 +185,24 @@ def test_raexpert_hash_roundtrip_and_pagination():
     assert [r.subject for r in rs] == ["А", "Б", "В", "Г", "Д"]
     # страницы 2 и 3 из пагинатора, 4-я сгенерирована и оказалась пустой
     assert [int(decode_page_hash(h)["PAGE"]) for h in state["posts"]] == [2, 3, 4]
+
+
+def test_moex_sector_prefix_and_acra_press():
+    from bondtrader.data.ratings import issuer_match, issuer_tokens
+    from bondtrader.data.ratings_web import parse_acra_press
+    assert issuer_tokens("iКаршеринг Руссия 001P-09") == ["каршеринг", "руссия"]
+    assert issuer_match('ПАО «Каршеринг Руссия»', "iКаршеринг Руссия 001P-09")
+    assert issuer_match("ГТЛК", "sГТЛК 2P-12")
+    html = """<div class="documents-row"><div class="documents-row__item" data-type="name"><span class="item__emit"> ООО &quot;СК &quot;ИНСАЙТ&quot; </span>
+    <div class="item__title-row"><a class="item__title" href="/press-releases/7260/"> АКРА ПОВЫСИЛО КРЕДИТНЫЙ РЕЙТИНГ ООО «СК «ИНСАЙТ» ДО УРОВНЯ A(RU), ПРОГНОЗ «СТАБИЛЬНЫЙ» </a></div></div>
+    <div class="documents-row__item" data-type="date">10.09.2026</div></div>
+    <div class="documents-row"><div class="documents-row__item" data-type="name"><span class="item__emit"> ПАО «ГК «Самолет» </span>
+    <div class="item__title-row"><a class="item__title" href="/press-releases/7261/"> АКРА ПРИСВОИЛО ВЫПУСКУ ОБЛИГАЦИЙ ПАО «ГК «САМОЛЕТ» КРЕДИТНЫЙ РЕЙТИНГ A-(RU) </a></div></div>
+    <div class="documents-row__item" data-type="date">09.09.2026</div></div>
+    <div class="documents-row"><div class="documents-row__item" data-type="name"><span class="item__emit"> АО «Х» </span>
+    <div class="item__title-row"><a class="item__title" href="/press-releases/7262/"> АКРА ОТОЗВАЛО КРЕДИТНЫЙ РЕЙТИНГ АО «Х» BB(RU) </a></div></div></div>"""
+    rs = parse_acra_press(html)
+    assert [(r.subject, r.rating, r.kind) for r in rs] == [('ООО "СК "ИНСАЙТ"', "A", "issuer"), ("ПАО «ГК «Самолет»", "A-", "issue")]
+    assert rs[0].date == date(2026, 9, 10) and rs[0].agency == "АКРА"
+    book = RatingsBook(rs)
+    assert book.lookup(Bond(secid="RU000A10BW96", name="СамолетP18", full_name="ГК Самолет БО-П18")).rating == "A-"

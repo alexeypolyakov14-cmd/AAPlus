@@ -117,8 +117,7 @@ def discover_deep(urls: Optional[list[str]] = None) -> None:
             i = m.start()
             print("   near pager: " + re.sub(r"\s+", " ", text[max(0, i - 300): i + 500])[:800])
         # тела JS-функций и переменных, отвечающих за пагинацию/экспорт
-        for key in ("function setRatingPageHash", "CSRFAjaxTokenPageHash", "rating_page_hash", "export_checkbox", "function exportRatings",
-                    "ratings-export", "FRAGMENT", "PAGEN_1", "issuers-list", "emissions-list", "ajax/list", "getList"):
+        for key in ("Выполняет аякс запрос", "PAGEN_1", "documents-row__item", "data-type=\"date\"", "load-more", "showMore"):
             for m in list(re.finditer(re.escape(key), text))[:2]:
                 i = m.start()
                 print(f"   JS[{key}]: " + re.sub(r"\s+", " ", text[max(0, i - 200): i + 900]))
@@ -338,6 +337,7 @@ RAEXPERT_SECTIONS = {
     "leasing_rel": ("issuer", "https://raexpert.ru/ratings/leasing_rel/"),
     "mfi_credits_all": ("issuer", "https://raexpert.ru/ratings/mfi_credits_all/"),
     "debt_inst": ("issue", "https://raexpert.ru/ratings/debt_inst/"),
+    "regions": ("issuer", "https://raexpert.ru/ratings/regions/"),
 }
 
 
@@ -459,4 +459,58 @@ def load_raexpert(max_pages: int = 80, client: Optional[RaexpertClient] = None) 
             continue
         log.info("Эксперт РА %s: %d записей", key, len(got))
         out.extend(got)
+    return out
+
+
+# ---- АКРА: пресс-релизы (серверный HTML, блоки documents-row) ----
+_ACRA_ITEM_RE = re.compile(r'<span class="item__emit">(.*?)</span>.*?<a class="item__title"[^>]*href="([^"]*)"[^>]*>(.*?)</a>', re.S | re.I)
+_ACRA_LEVEL_RE = re.compile(r"(?:ДО УРОВНЯ|НА УРОВНЕ|УРОВНЯ|РЕЙТИНГ)\s+([ABC]{1,3}[+-]?)\(RU\)", re.I)
+_ACRA_ANY_RE = re.compile(r"([ABC]{1,3}[+-]?)\(RU\)")
+
+
+def parse_acra_press(text: str) -> list[Rating]:
+    """Пресс-релизы АКРА -> рейтинги. Отзывы пропускаются; выпуски помечаются kind=issue."""
+    out: list[Rating] = []
+    # дата ищется в окрестности элемента (после заголовка)
+    for m in _ACRA_ITEM_RE.finditer(text):
+        emit = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", m.group(1)))).strip()
+        title = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", m.group(3)))).strip()
+        up = title.upper()
+        if "ОТОЗВАЛО" in up or "ОТЗЫВ" in up or "ПРЕКРАТИЛО" in up:
+            continue
+        rm = _ACRA_LEVEL_RE.search(title) or _ACRA_ANY_RE.search(title)
+        if not rm:
+            continue
+        rating = normalize_rating(rm.group(1))
+        if not rating:
+            continue
+        kind = "issue" if re.search(r"ВЫПУСК|ОБЛИГАЦ", up) else "issuer"
+        tail = text[m.end(): m.end() + 1500]
+        dm = _DATE_RE.search(tail)
+        d = date(int(dm.group(3)), int(dm.group(2)), int(dm.group(1))) if dm else None
+        out.append(Rating(subject=emit or title, agency="АКРА", rating=rating, date=d, kind=kind))
+    return out
+
+
+def load_acra_press(max_pages: int = 40) -> list[Rating]:
+    """Обход пресс-релизов АКРА: ?PAGEN_1=N (Bitrix). Останавливается, когда новых записей нет."""
+    out: list[Rating] = []
+    seen: set[tuple] = set()
+    for page in range(1, max_pages + 1):
+        url = CANDIDATES["acra_press"] + (f"?PAGEN_1={page}" if page > 1 else "")
+        try:
+            code, _, text = fetch(url)
+        except Exception as e:  # noqa: BLE001
+            log.warning("АКРА %s: %s", url, e)
+            break
+        if code != 200:
+            break
+        got = parse_acra_press(text)
+        new = [r for r in got if (r.subject, r.rating, r.date, r.kind) not in seen]
+        if not new:
+            break
+        for r in new:
+            seen.add((r.subject, r.rating, r.date, r.kind))
+        out.extend(new)
+    log.info("АКРА пресс-релизы: %d записей", len(out))
     return out
