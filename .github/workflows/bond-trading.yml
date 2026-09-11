@@ -112,8 +112,11 @@ jobs:
             bond-trading/data/financials.csv
             bond-trading/data/issuers.csv
             bond-trading/data/disclosure.csv
-          key: credit-books-${{ github.run_id }}
-          restore-keys: credit-books-
+          key: books-${{ github.run_id }}
+          restore-keys: |
+            books-
+            daily-books-
+            credit-books-
       - name: Книга рейтингов из предыдущих прогонов (кэш)
         uses: actions/cache@v4
         with:
@@ -208,8 +211,9 @@ jobs:
             bond-trading/data/financials.csv
             bond-trading/data/issuers.csv
             bond-trading/data/disclosure.csv
-          key: daily-books-${{ github.run_id }}
+          key: books-${{ github.run_id }}
           restore-keys: |
+            books-
             daily-books-
             credit-books-
       - name: Рейтинги (обновление, накопительно; АКРА — только свежие пресс-релизы)
@@ -288,8 +292,9 @@ jobs:
             bond-trading/data/financials.csv
             bond-trading/data/issuers.csv
             bond-trading/data/disclosure.csv
-          key: daily-books-none
+          key: books-none
           restore-keys: |
+            books-
             daily-books-
             credit-books-
       - name: Ответить на накопившиеся нажатия и команды
@@ -323,8 +328,9 @@ jobs:
             bond-trading/data/financials.csv
             bond-trading/data/issuers.csv
             bond-trading/data/disclosure.csv
-          key: daily-books-none
+          key: books-none
           restore-keys: |
+            books-
             daily-books-
             credit-books-
       - name: Выпуски и статус в скрине
@@ -390,8 +396,11 @@ jobs:
             bond-trading/data/financials.csv
             bond-trading/data/issuers.csv
             bond-trading/data/disclosure.csv
-          key: credit-books-none
-          restore-keys: credit-books-
+          key: books-none
+          restore-keys: |
+            books-
+            daily-books-
+            credit-books-
       - name: Счёт песочницы
         run: bondtrader sandbox-init --amount 1000000
       - name: Портфель до

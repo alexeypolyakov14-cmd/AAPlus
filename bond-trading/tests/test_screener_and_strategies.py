@@ -207,3 +207,12 @@ def test_gspread_strategy_ranks_by_spread():
     best = max((r.metrics.g_spread for r in rows if not r.bond.is_ofz and not r.bond.is_floater and r.metrics.g_spread is not None), default=None)
     assert best is None or spreads[0] == best
     assert all("G-спред" in st.explain(ctx)[s] for s in corp)
+
+
+def test_issuer_key_merges_series_suffixes():
+    from bondtrader.models import issuer_key_of
+    assert issuer_key_of("БалтЛизП16") == issuer_key_of("БалтЛизП15") == "БАЛТЛИЗ"
+    assert issuer_key_of("АРЛФ1Р02") == issuer_key_of("АРЛФ1Р01") == "АРЛФ"
+    assert issuer_key_of("iКарРус1P6") == "IКАРРУС" and issuer_key_of("СЕРГВ БО-2") == "СЕРГВ"
+    assert issuer_key_of("NSKATD-03") == issuer_key_of("NSKATD1Р01")
+    assert issuer_key_of("АПРИ 2Р13") == "АПРИ" and issuer_key_of("ВИС Ф БП04") == "ВИС Ф"

@@ -95,10 +95,29 @@ class Bond:
 
     @property
     def issuer_key(self) -> str:
-        """Грубый ключ эмитента для лимитов концентрации (первое слово названия; ОФЗ — Минфин)."""
+        """Грубый ключ эмитента для лимитов концентрации (ОФЗ — Минфин).
+
+        Краткие имена MOEX склеивают эмитента и серию без пробела («БалтЛизП16», «АРЛФ1Р02», «iКарРус1P6»),
+        поэтому берём буквенный префикс имени до первой цифры/знака и отбрасываем хвост-маркер серии (БО, ПБО, БП, П, Б, Р).
+        """
         if self.is_ofz:
             return "МИНФИН"
-        return (self.name or self.secid).split()[0].upper().rstrip(",.-")
+        return issuer_key_of(self.name or self.secid)
+
+
+_ISSUER_PREFIX_RE = re.compile(r"^[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё ]*")
+_SERIES_TAIL_RE = re.compile(r"\s*(ПБО|БО|БП|ПБ|П|Б|Р)$")
+
+
+def issuer_key_of(name: str) -> str:
+    m = _ISSUER_PREFIX_RE.match(name or "")
+    key = (m.group(0) if m else (name or "")).strip()
+    if not key:
+        return (name or "").split()[0].upper() if name else ""
+    stripped = _SERIES_TAIL_RE.sub("", key).strip()
+    if len(stripped) >= 3:
+        key = stripped
+    return key.upper().rstrip(",.-")
 
 
 @dataclass
