@@ -69,7 +69,7 @@ def _screen(snap: MarketSnapshot, settings: Settings, args) -> list[ScreenRow]:
     if getattr(args, "min_rating", None):
         cfg.min_rating = args.min_rating
     scr = Screener(cfg)
-    rows = scr.run(snap.universe, snap.curve, snap.settle, enrich=snap.enrich, ratings=snap.ratings)
+    rows = scr.run(snap.universe, snap.curve, snap.settle, **snap.screen_kwargs())
     if getattr(args, "verbose", False):
         rej = pd.Series(scr.rejected).value_counts()
         print("Отсев по причинам:\n" + rej.to_string(), file=sys.stderr)
@@ -92,7 +92,11 @@ def _header(snap: MarketSnapshot) -> None:
     kr = f"{snap.keyrate.current:.2f}% ({snap.keyrate.regime})" if snap.keyrate else "н/д"
     cv = f"{snap.curve.source}, 1Y {snap.curve.yield_at(1):.2f}% / 10Y {snap.curve.yield_at(10):.2f}%" if snap.curve else "н/д"
     rt = f"{len(snap.ratings)} записей" if snap.ratings else "нет"
-    print(f"Дата: {snap.settle}  Источник: {snap.source}  Бумаг: {len(snap.universe)}  Ключевая ставка: {kr}  Кривая: {cv}  Рейтинги: {rt}\n")
+    fin = f"{snap.financials.issuers} эмитентов" if snap.financials else "нет"
+    ev = f"{len(snap.events)} событий" if snap.events else "нет"
+    nw = f"{len(snap.news)} новостей" if snap.news else "нет"
+    print(f"Дата: {snap.settle}  Источник: {snap.source}  Бумаг: {len(snap.universe)}  Ключевая ставка: {kr}  Кривая: {cv}  "
+          f"Рейтинги: {rt}  Отчётность: {fin}  e-disclosure: {ev}  Новости: {nw}\n")
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +290,21 @@ def cmd_portfolio(args, settings):
         print(pd.DataFrame(recs).to_string(index=False))
     if pr.issuer_exposure:
         print("\nЭкспозиция по эмитентам: " + ", ".join(f"{k} {v:.1%}" for k, v in sorted(pr.issuer_exposure.items(), key=lambda kv: -kv[1])))
+    try:
+        open_orders = broker.open_orders()
+    except Exception as e:  # noqa: BLE001
+        open_orders = []
+        print(f"\nАктивные заявки: не удалось получить ({e})")
+    if open_orders:
+        from .execution.tinvest import from_quotation, g as _g
+        recs = [{"order_id": _g(o, "order_id", "orderId"), "instrument": _g(o, "instrument_uid", "instrumentUid", "figi"),
+                 "direction": str(_g(o, "direction", default="")).replace("ORDER_DIRECTION_", ""),
+                 "lots": _g(o, "lots_requested", "lotsRequested"), "executed": _g(o, "lots_executed", "lotsExecuted"),
+                 "price": from_quotation(_g(o, "initial_security_price", "initialSecurityPrice")),
+                 "status": str(_g(o, "execution_report_status", "executionReportStatus", default="")).replace("EXECUTION_REPORT_STATUS_", "")}
+                for o in open_orders]
+        print(f"\nАктивные заявки: {len(open_orders)} (деньги под ними заблокированы и не входят в «деньги» выше)")
+        print(pd.DataFrame(recs).to_string(index=False))
     print(f"\nРеализованный PnL {pf.realized_pnl:,.0f}  купоны {pf.coupons_received:,.0f}  комиссии {pf.commissions_paid:,.0f}")
 
 
@@ -414,11 +433,203 @@ def cmd_ratings(args, settings):
 
 
 def cmd_financials(args, settings):
+    from .data.financials import FinancialsBook, IssuerMap, IssuerRecord, implied_grade
+    fin_path = settings.get("data", "financials_csv", default="data/financials.csv")
+    iss_path = settings.get("data", "issuers_csv", default="data/issuers.csv")
+    cache_dir = settings.get("data", "financials_cache", default="data/financials")
     if args.action == "discover":
         from .data.financials import discover
         discover(args.query or "Балтийский лизинг")
         return
-    raise SystemExit("пока доступно только: financials discover")
+    if args.action == "fetch":
+        from .data.girbo import GirboClient, GirboUnavailable, fetch_issuer
+        book, issuers = FinancialsBook.from_csv(fin_path), IssuerMap.from_csv(iss_path)
+        queries: list[tuple[str, Optional[object]]] = [(q, None) for q in (args.query or [])]
+        if args.from_screen:
+            snap = load_snapshot(settings, args.fixtures)
+            rows = _screen(snap, settings, args)
+            seen: set[str] = set()
+            for r in rows:
+                if r.bond.is_ofz:
+                    continue
+                key = r.inn or r.bond.issuer_key
+                if key in seen:
+                    continue
+                seen.add(key)
+                queries.append((r.inn or r.bond.full_name or r.bond.name, r.bond))
+        client = GirboClient()
+        ok, failed = 0, 0
+        for q, bond in queries:
+            try:
+                org, sts = fetch_issuer(client, q, cache_dir=cache_dir, years=args.years, refresh=args.refresh)
+            except GirboUnavailable as e:
+                print(f"ГИР БО недоступен: {e}\nЗапустите команду из РФ (или через российский прокси) — из-за рубежа сайт отдаёт заглушку.")
+                break
+            except Exception as e:  # noqa: BLE001
+                print(f"{q}: ошибка {e}"); failed += 1
+                continue
+            if not org:
+                print(f"{q}: организация не найдена"); failed += 1
+                continue
+            for st in sts:
+                book.add(st)
+            inn = str(org.get("inn") or "")
+            if inn and bond is not None and issuers.lookup(bond) is None:
+                issuers.add(IssuerRecord(inn, org.get("shortName") or org.get("fullName") or "", alias=bond.name.split()[0] if bond.name else "",
+                                         emitter_id=""))
+            ok += 1
+            latest = book.metrics(inn) if inn else None
+            print(f"{q}: {org.get('shortName') or org.get('fullName')} ИНН {inn}: отчётов {len(sts)}"
+                  + (f", последний {latest.year}: балл {latest.score:.0f} ({implied_grade(latest.score)}) {'; '.join(latest.flags)}" if latest else ""))
+        book.to_csv(fin_path); issuers.to_csv(iss_path)
+        print(f"Готово: {ok} эмитентов загружено, {failed} с ошибками; книга: {book.issuers} эмитентов / {len(book)} отчётов -> {fin_path}; карта ИНН: {len(issuers)} -> {iss_path}")
+        return
+    book = FinancialsBook.from_csv(fin_path)
+    if args.action == "show":
+        inn = args.query[0] if args.query else ""
+        if not inn.isdigit():
+            issuers = IssuerMap.from_csv(iss_path)
+            hit = next((r for r in issuers.records if inn.lower() in (r.name + " " + r.alias).lower()), None)
+            if not hit:
+                raise SystemExit(f"{inn}: не найден в карте ИНН {iss_path}")
+            inn = hit.inn
+        m = book.metrics(inn)
+        if not m:
+            raise SystemExit(f"ИНН {inn}: нет отчётности в {fin_path}")
+        print(f"ИНН {inn}, {m.year}: балл {m.score:.0f} (≈{implied_grade(m.score)})")
+        print(f"  выручка {m.revenue:,.0f}  EBIT {m.ebit:,.0f}  чистая прибыль {m.net_income:,.0f}  капитал {m.equity:,.0f}  (тыс. руб.)")
+        print(f"  долг {m.total_debt:,.0f}  чистый долг {m.net_debt:,.0f}  деньги {m.cash:,.0f}  короткий долг {m.short_debt_share:.0%}  проценты {m.interest_expense:,.0f}")
+        def f(x, fmt="{:.2f}"): return "н/д" if x is None else fmt.format(x)
+        print(f"  покрытие процентов {f(m.interest_coverage)}x  чистый долг/EBIT {f(m.net_debt_to_ebit)}x  обязательства/капитал {f(m.liabilities_to_equity)}x  "
+              f"текущая ликвидность {f(m.current_ratio)}  деньги/короткий долг {f(m.cash_to_short_debt)}")
+        print("  флаги: " + ("; ".join(m.flags) if m.flags else "нет"))
+        return
+    if args.action == "coverage":
+        snap = load_snapshot(settings, args.fixtures)
+        rows = _screen(snap, settings, args)
+        corp = [r for r in rows if not r.bond.is_ofz]
+        with_inn = [r for r in corp if r.inn]
+        with_fin = [r for r in corp if r.fin is not None]
+        print(f"В скрине {len(corp)} корпоративных бумаг: с ИНН {len(with_inn)}, с отчётностью {len(with_fin)}")
+        missing = [r for r in corp if r.fin is None]
+        if missing:
+            print("Без отчётности (financials fetch --from-screen загрузит по названию/ИНН):")
+            print(pd.DataFrame([{"secid": r.secid, "name": r.bond.name, "full_name": r.bond.full_name[:40], "inn": r.inn, "sector": r.sector,
+                                 "rating": r.rating_str} for r in missing]).to_string(index=False))
+        return
+
+
+def cmd_disclosure(args, settings):
+    from .data.disclosure import EdisclosureClient, EventsBook, discover
+    path = settings.get("data", "disclosure_csv", default="data/disclosure.csv")
+    if args.action == "discover":
+        discover(args.query[0] if args.query else "Балтийский лизинг", browser=args.browser)
+        return
+    book = EventsBook.from_csv(path)
+    if args.action == "list":
+        evs = [e for e in book.events if not args.kind or e.kind in args.kind]
+        print(f"Книга событий: {len(book)} записей" + (f", показано {len(evs)}" if args.kind else ""))
+        if evs:
+            print(pd.DataFrame([{"date": e.date, "issuer": e.issuer[:30], "inn": e.inn, "kind": e.kind, "title": e.title[:90]} for e in evs]).to_string(index=False))
+        return
+    if args.action == "fetch":
+        from datetime import timedelta
+        from .data.financials import IssuerMap
+        queries: list[tuple[str, str]] = [(q, "") for q in (args.query or [])]
+        if args.from_screen:
+            snap = load_snapshot(settings, args.fixtures)
+            rows = _screen(snap, settings, args)
+            seen: set[str] = set()
+            for r in rows:
+                if r.bond.is_ofz or r.bond.issuer_key in seen:
+                    continue
+                seen.add(r.bond.issuer_key)
+                queries.append((r.inn or r.bond.full_name or r.bond.name, r.inn))
+        client = EdisclosureClient(browser=args.browser)
+        since = date.today() - timedelta(days=args.days)
+        added = 0
+        try:
+            for q, inn in queries:
+                try:
+                    found = client.search(q)
+                except Exception as e:  # noqa: BLE001
+                    print(f"{q}: ошибка поиска {e}")
+                    continue
+                if not found:
+                    print(f"{q}: компания не найдена")
+                    continue
+                c = found[0]
+                try:
+                    evs = client.events(c["id"], pages=args.pages, since=since)
+                except Exception as e:  # noqa: BLE001
+                    print(f"{q}: ошибка ленты {e}")
+                    continue
+                n = 0
+                for e in evs:
+                    e.inn = e.inn or c.get("inn") or inn
+                    e.issuer = e.issuer or c["name"]
+                    n += book.add(e)
+                added += n
+                stops = [e for e in evs if e.kind in ("default", "tech_default", "restructuring")]
+                print(f"{q}: {c['name']} (id {c['id']}): фактов {len(evs)}, новых {n}, стоп-факторов {len(stops)}")
+        finally:
+            client.close()
+        book.to_csv(path)
+        print(f"Добавлено {added} событий, всего {len(book)} -> {path}")
+        return
+
+
+def cmd_news(args, settings):
+    from .data.news import NewsBook, discover, scan_general_feeds, search_news
+    path = settings.get("data", "news_csv", default="data/news.csv")
+    if args.action == "discover":
+        discover(args.query[0] if args.query else "Балтийский лизинг")
+        return
+    book = NewsBook.from_csv(path)
+    if args.action == "list":
+        items = book.items if not args.query else book.for_issuer(name=args.query[0])
+        items = [it for it in items if not args.negative or it.score < 0]
+        print(f"Книга новостей: {len(book)} записей, показано {len(items)}")
+        if items:
+            print(pd.DataFrame([{"date": it.date, "query": it.query[:25], "score": it.score, "tags": it.tags, "title": it.title[:90],
+                                 "source": it.source[:20]} for it in sorted(items, key=lambda x: x.date, reverse=True)[: args.top]]).to_string(index=False))
+        return
+    if args.action == "show":
+        if not args.query:
+            raise SystemExit("укажите --query <эмитент>")
+        ns = book.issuer_score(date.today(), name=args.query[0], days=args.days)
+        print(f"{args.query[0]}: {ns.describe()}")
+        for it in ns.items[:20]:
+            print(f"  {it.date} [{it.score:+.1f} {it.tags or '-'}] {it.title[:100]}")
+        return
+    if args.action == "fetch":
+        names: list[tuple[str, str]] = [(q, "") for q in (args.query or [])]
+        if args.from_screen:
+            snap = load_snapshot(settings, args.fixtures)
+            rows = _screen(snap, settings, args)
+            seen: set[str] = set()
+            for r in rows:
+                if r.bond.is_ofz or r.bond.issuer_key in seen:
+                    continue
+                seen.add(r.bond.issuer_key)
+                names.append((r.bond.full_name or r.bond.name, r.inn))
+        added, neg = 0, 0
+        for name, inn in names:
+            items = search_news(name, sources=args.sources or ("google", "bing"), days=args.days, inn=inn)
+            n = sum(book.add(it) for it in items)
+            added += n
+            bad = [it for it in items if it.score <= -3]
+            neg += len(bad)
+            print(f"{name[:40]}: найдено {len(items)}, новых {n}" + (f", сильный негатив: {bad[0].title[:70]}" if bad else ""))
+        if args.general:
+            gen = scan_general_feeds([n for n, _ in names], days=min(args.days, 30))
+            g_added = sum(book.add(it) for it in gen)
+            added += g_added
+            print(f"Общие ленты: {len(gen)} совпадений, новых {g_added}")
+        book.prune()
+        book.to_csv(path)
+        print(f"Добавлено {added} новостей (сильный негатив: {neg}), всего {len(book)} -> {path}")
+        return
 
 
 def cmd_strategies(args, settings):
@@ -461,8 +672,25 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("keyrate", parents=[common], help="ключевая ставка ЦБ и фаза цикла"); sp.set_defaults(fn=cmd_keyrate)
     sp = sub.add_parser("bond", parents=[common], help="карточка облигации"); sp.add_argument("secid"); sp.add_argument("--schedule", action="store_true"); sp.set_defaults(fn=cmd_bond)
     sp = sub.add_parser("strategies", parents=[common], help="список стратегий"); sp.set_defaults(fn=cmd_strategies)
-    sp = sub.add_parser("financials", parents=[common], help="отчётность эмитентов: discover")
-    sp.add_argument("action", choices=["discover"]); sp.add_argument("--query", help="название эмитента для разведки"); sp.set_defaults(fn=cmd_financials)
+    sp = sub.add_parser("financials", parents=[common], help="отчётность эмитентов (ГИР БО): fetch | show | coverage | discover")
+    sp.add_argument("action", choices=["fetch", "show", "coverage", "discover"])
+    sp.add_argument("--query", nargs="*", help="ИНН или названия эмитентов (fetch/show/discover)")
+    sp.add_argument("--from-screen", action="store_true", help="fetch: все эмитенты из текущего скрина")
+    sp.add_argument("--years", type=int, default=3); sp.add_argument("--refresh", action="store_true", help="fetch: игнорировать кэш")
+    screen_opts(sp); sp.set_defaults(fn=cmd_financials)
+    sp = sub.add_parser("disclosure", parents=[common], help="существенные факты e-disclosure: fetch | list | discover")
+    sp.add_argument("action", choices=["fetch", "list", "discover"])
+    sp.add_argument("--query", nargs="*", help="ИНН или названия эмитентов")
+    sp.add_argument("--from-screen", action="store_true"); sp.add_argument("--browser", action="store_true", help="через Playwright/Chromium")
+    sp.add_argument("--pages", type=int, default=3); sp.add_argument("--days", type=int, default=730)
+    sp.add_argument("--kind", nargs="*", help="list: фильтр по типу (default, tech_default, restructuring, coupon, rating, ...)")
+    screen_opts(sp); sp.set_defaults(fn=cmd_disclosure)
+    sp = sub.add_parser("news", parents=[common], help="новостной фон эмитентов: fetch | list | show | discover")
+    sp.add_argument("action", choices=["fetch", "list", "show", "discover"])
+    sp.add_argument("--query", nargs="*", help="названия эмитентов"); sp.add_argument("--from-screen", action="store_true")
+    sp.add_argument("--sources", nargs="*", choices=["google", "bing"]); sp.add_argument("--general", action="store_true", help="fetch: также общие ленты Интерфакс/РБК/Коммерсант/Финам")
+    sp.add_argument("--days", type=int, default=120); sp.add_argument("--negative", action="store_true", help="list: только негатив"); sp.add_argument("--top", type=int, default=60)
+    screen_opts(sp); sp.set_defaults(fn=cmd_news)
     sp = sub.add_parser("ratings", parents=[common], help="кредитные рейтинги: list | show SECID | coverage | discover")
     sp.add_argument("action", choices=["list", "show", "coverage", "discover", "fetch"]); sp.add_argument("secid", nargs="?")
     sp.add_argument("--names", nargs="*", help="для discover: какие источники смотреть (для --deep: список URL)")

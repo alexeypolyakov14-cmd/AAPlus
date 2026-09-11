@@ -14,6 +14,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "keyrate_from": "2013-09-13",
         "ratings_csv": "data/ratings.csv",
         "ratings_conservative": True,
+        "financials_csv": "data/financials.csv",     # книга отчётности (ГИР БО), длинный формат
+        "financials_cache": "data/financials",       # сырые ответы ГИР БО по ИНН
+        "issuers_csv": "data/issuers.csv",           # карта эмитент -> ИНН/сектор
+        "disclosure_csv": "data/disclosure.csv",     # существенные факты e-disclosure
+        "news_csv": "data/news.csv",                 # новостной фон по эмитентам
     },
     "screener": {
         "currency": "SUR",
@@ -33,6 +38,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "issuer_blacklist": [],
         "min_rating": "",
         "require_rating": False,
+        "exclude_default_days": 365,
+        "min_fin_score": 0.0,
+        "require_financials": False,
+        "news_days": 90,
+        "news_stop_score": -4.0,
     },
     "risk": {
         "max_weight_per_bond": 0.10,
@@ -46,6 +56,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "yield_vol_bp_daily": 15.0,
         "max_unrated_share": 1.0,
         "min_rating": "",
+        "max_sector_share": 1.0,
+        "fin_hard_stops": True,
     },
     "strategy": {
         "name": "carry",

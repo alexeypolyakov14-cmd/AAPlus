@@ -14,11 +14,14 @@
 """
 from __future__ import annotations
 
+import csv
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
-from typing import Optional
+from datetime import date
+from typing import Iterable, Optional
 
 import requests
 
@@ -209,10 +212,14 @@ class Statement:
     year: int
     values: dict[str, float] = field(default_factory=dict)
     source: str = "girbo"
+    previous: dict[str, float] = field(default_factory=dict)   # значения за предыдущий год из той же формы
 
     def v(self, code: str, default: float = 0.0) -> float:
         x = self.values.get(code)
         return float(x) if x is not None else default
+
+    def prev_statement(self) -> Optional["Statement"]:
+        return Statement(self.inn, self.year - 1, dict(self.previous), self.source) if self.previous else None
 
 
 @dataclass
@@ -297,3 +304,155 @@ def implied_grade(score: float) -> str:
     if score >= 60: return "BB"
     if score >= 40: return "B"
     return "CCC"
+
+
+# ---------------------------------------------------------------------------
+# Книга отчётности (data/financials.csv, длинный формат) и карта эмитент -> ИНН (data/issuers.csv)
+# ---------------------------------------------------------------------------
+
+class FinancialsBook:
+    """inn -> {year -> Statement}. CSV: inn,year,code,value,source,fetched."""
+
+    def __init__(self, statements: Iterable[Statement] = ()):
+        self.by_inn: dict[str, dict[int, Statement]] = {}
+        for st in statements:
+            self.add(st)
+
+    def add(self, st: Statement) -> None:
+        self.by_inn.setdefault(st.inn, {})[st.year] = st
+
+    def __len__(self) -> int:
+        return sum(len(v) for v in self.by_inn.values())
+
+    @property
+    def issuers(self) -> int:
+        return len(self.by_inn)
+
+    def latest(self, inn: str) -> Optional[Statement]:
+        ys = self.by_inn.get(inn)
+        return ys[max(ys)] if ys else None
+
+    def metrics(self, inn: str) -> Optional[CreditMetrics]:
+        st = self.latest(inn)
+        if st is None:
+            return None
+        prev = self.by_inn[inn].get(st.year - 1) or st.prev_statement()
+        return compute_metrics(st, prev)
+
+    @classmethod
+    def from_csv(cls, path: str) -> "FinancialsBook":
+        book = cls()
+        if not path or not os.path.exists(path):
+            return book
+        rows: dict[tuple[str, int], Statement] = {}
+        with open(path, encoding="utf-8-sig", newline="") as f:
+            for r in csv.DictReader(f):
+                try:
+                    inn, year, code = r["inn"].strip(), int(r["year"]), r["code"].strip()
+                    val = float(r["value"])
+                except (KeyError, ValueError):
+                    continue
+                st = rows.setdefault((inn, year), Statement(inn, year, {}, (r.get("source") or "girbo").strip()))
+                if code.startswith("prev"):
+                    st.previous[code[4:]] = val
+                else:
+                    st.values[code] = val
+        for st in rows.values():
+            book.add(st)
+        log.info("отчётность: %d эмитентов, %d отчётов из %s", book.issuers, len(book), path)
+        return book
+
+    def to_csv(self, path: str) -> None:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        today = date.today().isoformat()
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["inn", "year", "code", "value", "source", "fetched"])
+            for inn in sorted(self.by_inn):
+                for year in sorted(self.by_inn[inn]):
+                    st = self.by_inn[inn][year]
+                    for code in sorted(st.values):
+                        w.writerow([inn, year, code, f"{st.values[code]:.0f}", st.source, today])
+                    for code in sorted(st.previous):
+                        w.writerow([inn, year, "prev" + code, f"{st.previous[code]:.0f}", st.source, today])
+
+
+@dataclass
+class IssuerRecord:
+    inn: str
+    name: str = ""          # название эмитента (как у агентств / в ЕГРЮЛ)
+    alias: str = ""         # префикс краткого имени бумаги на MOEX (БалтЛиз)
+    isin: str = ""          # конкретный выпуск (если карта по выпускам)
+    sector: str = ""        # переопределение сектора (иначе — по ключевым словам)
+    emitter_id: str = ""
+
+
+class IssuerMap:
+    """Сопоставление бумаги MOEX с ИНН эмитента. CSV: inn,name,alias,isin,sector,emitter_id."""
+
+    def __init__(self, records: Iterable[IssuerRecord] = ()):
+        self.records: list[IssuerRecord] = []
+        self.by_isin: dict[str, IssuerRecord] = {}
+        self.by_emitter: dict[str, IssuerRecord] = {}
+        for r in records:
+            self.add(r)
+
+    def add(self, r: IssuerRecord) -> None:
+        self.records.append(r)
+        if r.isin:
+            self.by_isin[r.isin.upper()] = r
+        if r.emitter_id:
+            self.by_emitter[str(r.emitter_id)] = r
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def lookup(self, bond, emitter_id: Optional[str] = None) -> Optional[IssuerRecord]:
+        from .ratings import _norm_name, issuer_match
+        if bond.isin and bond.isin.upper() in self.by_isin:
+            return self.by_isin[bond.isin.upper()]
+        if emitter_id and str(emitter_id) in self.by_emitter:
+            return self.by_emitter[str(emitter_id)]
+        name = _norm_name(bond.name)
+        best: Optional[IssuerRecord] = None
+        for r in self.records:
+            if r.alias and name.startswith(_norm_name(r.alias)) and (best is None or len(r.alias) > len(best.alias)):
+                best = r
+        if best:
+            return best
+        full = bond.full_name or bond.name
+        for r in self.records:
+            if r.name and issuer_match(r.name, full):
+                return r
+        return None
+
+    @classmethod
+    def from_csv(cls, path: str) -> "IssuerMap":
+        m = cls()
+        if not path or not os.path.exists(path):
+            return m
+        with open(path, encoding="utf-8-sig", newline="") as f:
+            for r in csv.DictReader(f):
+                inn = (r.get("inn") or "").strip()
+                if not inn:
+                    continue
+                m.add(IssuerRecord(inn, (r.get("name") or "").strip(), (r.get("alias") or "").strip(),
+                                   (r.get("isin") or "").strip().upper(), (r.get("sector") or "").strip(),
+                                   str(r.get("emitter_id") or "").strip()))
+        return m
+
+    def to_csv(self, path: str) -> None:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["inn", "name", "alias", "isin", "sector", "emitter_id"])
+            for r in self.records:
+                w.writerow([r.inn, r.name, r.alias, r.isin, r.sector, r.emitter_id])
+
+
+def inn_from_description(desc: dict) -> Optional[str]:
+    """ИНН эмитента из блока description MOEX ISS (/iss/securities/{secid}.json), если биржа его отдаёт."""
+    for k, v in (desc or {}).items():
+        if v and re.search(r"INN|ИНН", str(k), re.I) and re.fullmatch(r"\d{10}|\d{12}", str(v).strip()):
+            return str(v).strip()
+    return None

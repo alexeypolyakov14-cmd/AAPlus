@@ -6,6 +6,10 @@
 data:
   boards: [TQOB, TQCB]
   ratings_csv: data/ratings.csv
+  financials_csv: data/financials.csv    # ГИР БО: bondtrader -c configs/hy.yaml financials fetch --from-screen (из РФ)
+  issuers_csv: data/issuers.csv
+  disclosure_csv: data/disclosure.csv    # e-disclosure: bondtrader -c configs/hy.yaml disclosure fetch --from-screen (из РФ)
+  news_csv: data/news.csv                # новости: bondtrader -c configs/hy.yaml news fetch --from-screen (откуда угодно)
 
 screener:
   currency: SUR
@@ -22,6 +26,11 @@ screener:
   min_price: 70                # цена ниже 70 — тоже признак дистресса
   min_rating: B                # ниже B — преддефолт; ВДО живут в BB+…B
   require_rating: false        # пока книга рейтингов неполная — без рейтинга не отсекаем, но ограничиваем долю
+  exclude_default_days: 365    # (тех)дефолт/реструктуризация в e-disclosure за год — отсев
+  min_fin_score: 0             # балл отчётности (0 — не отсекать; стоп-факторы по капиталу/покрытию работают отдельно)
+  require_financials: false    # включить, когда книга отчётности покроет скрин
+  news_days: 90
+  news_stop_score: -4          # свежая новость про дефолт/банкротство/обыски — отсев
 
 risk:
   max_weight_per_bond: 0.04       # ≈500 тыс. при 12 млн
@@ -35,14 +44,23 @@ risk:
   yield_vol_bp_daily: 40          # спреды ВДО ходят сильнее ОФЗ
   max_unrated_share: 0.25         # не более четверти портфеля в бумагах без рейтинга
   min_rating: B
+  max_sector_share: 0.30          # лизинг/МФО/девелоперы — дефолты кластеризуются по секторам
+  fin_hard_stops: true            # отрицательный капитал / покрытие процентов < 1 — не покупаем
 
 strategy:
-  name: carry
+  name: value_hy                  # недооценённые ВДО; альтернатива — carry (bondtrader -c configs/hy.yaml signals -s carry)
   params:
     top_n: 30                     # 30 позиций: один дефолт ≈ −3% портфеля
+    w_spread: 0.40                # остаток спреда к справедливому по срезу рынка
+    w_fin: 0.35                   # балл отчётности минус балл, зашитый в рейтинг (0 без отчётности)
+    w_ret: 0.25                   # YTW − PD·LGD − издержки ликвидности
+    w_news: 0.15                  # новостной фон (0 без новостей)
+    lgd: 0.6
     horizon: 1.0
+    slippage_bp: 25
     max_duration: 2.5
     ofz_min_share: 0.10
+    min_coverage: 1.5             # стоп: покрытие процентов ниже — не берём (если отчётность есть)
   rebalance: monthly
 
 backtest:

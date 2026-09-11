@@ -24,6 +24,8 @@ class RiskLimits:
     min_list_level: int = 2  # допускаем уровни 1..min_list_level
     max_unrated_share: float = 1.0   # доля портфеля в бумагах без рейтинга (1.0 — без ограничения)
     min_rating: str = ""             # худший допустимый рейтинг для целевых весов
+    max_sector_share: float = 1.0    # доля корпоративного сектора (лизинг, МФО, девелоперы...) в портфеле
+    fin_hard_stops: bool = True      # при наличии отчётности: отрицательный капитал / покрытие < 1 — не покупаем
 
     @classmethod
     def from_dict(cls, d: dict) -> "RiskLimits":
@@ -67,8 +69,21 @@ class RiskManager:
                 continue
             if L.min_rating and r.rating is not None and not rating_at_least(r.rating.rating, L.min_rating):
                 continue
+            if r.stop_events or (L.fin_hard_stops and self._fin_stop(r)):
+                continue
             out.append(r)
         return out
+
+    @staticmethod
+    def _fin_stop(r: ScreenRow) -> Optional[str]:
+        f = r.fin
+        if f is None or r.bond.is_ofz:
+            return None
+        if f.equity <= 0:
+            return "отрицательный капитал"
+        if f.interest_coverage is not None and f.interest_coverage < 1.0:
+            return f"покрытие процентов {f.interest_coverage:.1f}x"
+        return None
 
     # ---- целевые веса ----
     def enforce_targets(self, targets: dict[str, float], rows: dict[str, ScreenRow]) -> tuple[dict[str, float], list[Violation]]:
@@ -90,6 +105,14 @@ class RiskManager:
             if L.min_rating and row.rating is not None and not rating_at_least(row.rating.rating, L.min_rating):
                 notes.append(Violation("rating", f"{secid}: рейтинг {row.rating.rating} ниже {L.min_rating}", secid))
                 continue
+            if row.stop_events:
+                e = row.stop_events[-1]
+                notes.append(Violation("default", f"{secid}: {e.kind} {e.date} (e-disclosure)", secid))
+                continue
+            fs = self._fin_stop(row) if L.fin_hard_stops else None
+            if fs:
+                notes.append(Violation("financials", f"{secid}: отчётность — {fs}", secid))
+                continue
             cap = L.max_weight_per_bond_ofz if row.bond.is_ofz else L.max_weight_per_bond
             if w > cap:
                 notes.append(Violation("bond_cap", f"{secid}: вес {w:.1%} обрезан до {cap:.0%}", secid, hard=False))
@@ -109,6 +132,19 @@ class RiskManager:
                 for i in ids:
                     out[i] *= k
                 notes.append(Violation("issuer_cap", f"{issuer}: доля {tot:.1%} обрезана до {L.max_weight_per_issuer:.0%}", hard=False))
+
+        # лимит на сектор (кроме ОФЗ/субфедов)
+        by_sector: dict[str, list[str]] = {}
+        for secid in out:
+            if not rows[secid].bond.is_ofz and rows[secid].sector not in ("gov", "subfed"):
+                by_sector.setdefault(rows[secid].sector or "other", []).append(secid)
+        for sector, ids in by_sector.items():
+            tot = sum(out[i] for i in ids)
+            if tot > L.max_sector_share + 1e-9:
+                k = L.max_sector_share / tot
+                for i in ids:
+                    out[i] *= k
+                notes.append(Violation("sector_cap", f"сектор {sector}: доля {tot:.1%} обрезана до {L.max_sector_share:.0%}", hard=False))
 
         # доля бумаг без рейтинга
         unrated = [s for s in out if not rows[s].bond.is_ofz and rows[s].rating is None]

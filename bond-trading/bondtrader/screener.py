@@ -4,14 +4,20 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 import pandas as pd
 
 from .analytics.bond_math import compute_metrics
 from .analytics.curve import ZeroCurve
 from .data.ratings import Rating, RatingsBook, rating_at_least
+from .data.sectors import sector_of
 from .models import Bond, BondMetrics, Quote
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .data.disclosure import DisclosureEvent, EventsBook
+    from .data.financials import CreditMetrics, FinancialsBook, IssuerMap
+    from .data.news import NewsBook, NewsScore
 
 
 @dataclass
@@ -22,6 +28,11 @@ class ScreenRow:
     score: float = 0.0
     flags: list[str] = field(default_factory=list)
     rating: Optional[Rating] = None
+    fin: Optional["CreditMetrics"] = None            # коэффициенты по последней отчётности (если есть)
+    inn: str = ""
+    sector: str = ""
+    stop_events: list["DisclosureEvent"] = field(default_factory=list)   # (тех)дефолты/реструктуризации за окно
+    news: Optional["NewsScore"] = None                # новостной фон эмитента за окно
 
     @property
     def secid(self) -> str:
@@ -42,6 +53,9 @@ class ScreenRow:
             "cur_yield": round(m.current_yield, 2), "years": round(m.years_to_maturity, 2),
             "turnover_mln": round(self.quote.turnover / 1e6, 1), "bid_ask_pct": self.quote.bid_ask_spread_pct,
             "maturity": self.bond.maturity, "offer": self.bond.offer_date, "rating": self.rating_str,
+            "sector": self.sector, "fin_score": None if self.fin is None else round(self.fin.score),
+            "fin_flags": "" if self.fin is None else ";".join(self.fin.flags),
+            "news": None if self.news is None or not self.news.n else round(self.news.score, 1),
             "score": round(self.score, 3), "flags": ",".join(self.flags),
         }
 
@@ -67,6 +81,11 @@ class ScreenerConfig:
     corporate_only: bool = False
     min_rating: str = ""             # напр. "BB-": бумаги с худшим рейтингом отсеиваются
     require_rating: bool = False     # без рейтинга — отсев (ОФЗ считаются AAA)
+    exclude_default_days: int = 365  # отсев эмитентов с (тех)дефолтом/реструктуризацией за N дней (книга событий)
+    min_fin_score: float = 0.0       # отсев по баллу отчётности (0 — не применять); бумаги без отчётности не трогаем
+    require_financials: bool = False # без отчётности — отсев (кроме ОФЗ)
+    news_days: int = 90              # окно новостного фона
+    news_stop_score: float = -4.0    # суммарный балл за окно или одна новость ниже порога — отсев (дефолт/банкротство в свежих новостях)
 
     @classmethod
     def from_dict(cls, d: dict) -> "ScreenerConfig":
@@ -124,9 +143,12 @@ class Screener:
         return None
 
     def run(self, universe: list[tuple[Bond, Quote]], curve: Optional[ZeroCurve], settle: date,
-            enrich: Optional[Callable[[Bond], Bond]] = None, ratings: Optional[RatingsBook] = None) -> list[ScreenRow]:
+            enrich: Optional[Callable[[Bond], Bond]] = None, ratings: Optional[RatingsBook] = None,
+            financials: Optional["FinancialsBook"] = None, issuers: Optional["IssuerMap"] = None,
+            events: Optional["EventsBook"] = None, news: Optional["NewsBook"] = None) -> list[ScreenRow]:
         """universe — пары (Bond, Quote); enrich — функция подгрузки графика (например MoexClient.enrich);
-        ratings — книга рейтингов (ОФЗ считаются AAA)."""
+        ratings — книга рейтингов (ОФЗ считаются AAA); financials/issuers — отчётность и карта ИНН;
+        events — книга существенных фактов e-disclosure (стоп-факторы)."""
         rows: list[ScreenRow] = []
         self.rejected = {}
         c = self.cfg
@@ -135,6 +157,30 @@ class Screener:
             if why:
                 self.rejected[bond.secid] = why
                 continue
+            issuer = issuers.lookup(bond) if (issuers is not None and not bond.is_ofz) else None
+            inn = issuer.inn if issuer else ""
+            sector = (issuer.sector if issuer and issuer.sector else sector_of(bond.name, bond.full_name))
+            stop_events = []
+            if events is not None and not bond.is_ofz and c.exclude_default_days > 0:
+                stop_events = events.stop_factors(settle, c.exclude_default_days, inn=inn, name=bond.full_name or bond.name)
+                if stop_events:
+                    e = stop_events[-1]
+                    self.rejected[bond.secid] = f"{e.kind} {e.date} (e-disclosure)"
+                    continue
+            fin = financials.metrics(inn) if (financials is not None and inn) else None
+            ns = None
+            if news is not None and not bond.is_ofz:
+                ns = news.issuer_score(settle, name=bond.full_name or bond.name, inn=inn, days=c.news_days)
+                if ns.n and (ns.score <= c.news_stop_score or (ns.worst is not None and ns.worst.score <= c.news_stop_score)):
+                    self.rejected[bond.secid] = f"новости: балл {ns.score:+.1f} ({ns.worst.title[:50] if ns.worst else ''})"
+                    continue
+            if not bond.is_ofz:
+                if fin is None and c.require_financials:
+                    self.rejected[bond.secid] = "нет отчётности"
+                    continue
+                if fin is not None and c.min_fin_score > 0 and fin.score < c.min_fin_score:
+                    self.rejected[bond.secid] = f"балл отчётности {fin.score:.0f} < {c.min_fin_score:.0f}"
+                    continue
             rating: Optional[Rating] = None
             if bond.is_ofz:
                 rating = Rating("Минфин России", "—", "AAA", kind="issuer")
@@ -178,7 +224,11 @@ class Screener:
                 flags.append(f"расхождение с YTM MOEX {quote.ytm_moex:.1f}")
             if not bond.is_ofz and rating is None and ratings is not None:
                 flags.append("без рейтинга")
-            rows.append(ScreenRow(bond, quote, m, flags=flags, rating=rating))
+            if fin is not None and fin.flags:
+                flags.append("отчётность: " + "; ".join(fin.flags))
+            if ns is not None and ns.negative:
+                flags.append(f"новости {ns.score:+.1f}")
+            rows.append(ScreenRow(bond, quote, m, flags=flags, rating=rating, fin=fin, inn=inn, sector=sector, stop_events=stop_events, news=ns))
         self._score(rows)
         rows.sort(key=lambda r: r.score, reverse=True)
         return rows

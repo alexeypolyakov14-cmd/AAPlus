@@ -13,6 +13,9 @@ from .config import Settings
 from .data.cache import SqliteCache
 from .data.cbr import KeyRateView, analyze_keyrate, fetch_keyrate_history, parse_keyrate_xml
 from .data.moex import MoexClient, parse_board_securities
+from .data.disclosure import EventsBook
+from .data.financials import FinancialsBook, IssuerMap
+from .data.news import NewsBook
 from .data.ratings import RatingsBook
 from .models import Bond, Quote
 from .screener import build_curve
@@ -30,6 +33,14 @@ class MarketSnapshot:
     enrich: Optional[Callable[[Bond], Bond]] = None
     source: str = "moex"
     ratings: Optional[RatingsBook] = None
+    financials: Optional[FinancialsBook] = None
+    issuers: Optional[IssuerMap] = None
+    events: Optional[EventsBook] = None
+    news: Optional[NewsBook] = None
+
+    def screen_kwargs(self) -> dict:
+        return {"enrich": self.enrich, "ratings": self.ratings, "financials": self.financials,
+                "issuers": self.issuers, "events": self.events, "news": self.news}
 
 
 def load_ratings(settings: Settings) -> Optional[RatingsBook]:
@@ -40,11 +51,20 @@ def load_ratings(settings: Settings) -> Optional[RatingsBook]:
     return book if len(book) else None
 
 
+def load_books(settings: Settings) -> tuple[Optional[FinancialsBook], Optional[IssuerMap], Optional[EventsBook], Optional[NewsBook]]:
+    fin = FinancialsBook.from_csv(settings.get("data", "financials_csv", default=""))
+    iss = IssuerMap.from_csv(settings.get("data", "issuers_csv", default=""))
+    ev = EventsBook.from_csv(settings.get("data", "disclosure_csv", default=""))
+    nw = NewsBook.from_csv(settings.get("data", "news_csv", default=""))
+    return (fin if len(fin) else None), (iss if len(iss) else None), (ev if len(ev) else None), (nw if len(nw) else None)
+
+
 def load_snapshot(settings: Settings, fixtures_dir: Optional[str] = None, client: Optional[MoexClient] = None) -> MarketSnapshot:
     ratings = load_ratings(settings)
+    financials, issuers, events, news = load_books(settings)
     if fixtures_dir:
         snap = _load_fixtures(fixtures_dir)
-        snap.ratings = ratings
+        snap.ratings, snap.financials, snap.issuers, snap.events, snap.news = ratings, financials, issuers, events, news
         return snap
     cache = SqliteCache(settings.get("data", "cache_path", default="data/cache/http_cache.sqlite"))
     client = client or MoexClient(cache=cache)
@@ -72,7 +92,8 @@ def load_snapshot(settings: Settings, fixtures_dir: Optional[str] = None, client
         kr = analyze_keyrate(kr_hist) if kr_hist else None
     except Exception as e:  # noqa: BLE001
         log.warning("ключевая ставка ЦБ недоступна: %s", e)
-    return MarketSnapshot(today, universe, curve, kr, kr_hist, enrich=client.enrich, source="moex", ratings=ratings)
+    return MarketSnapshot(today, universe, curve, kr, kr_hist, enrich=client.enrich, source="moex", ratings=ratings,
+                          financials=financials, issuers=issuers, events=events, news=news)
 
 
 def _load_fixtures(d: str) -> MarketSnapshot:

@@ -5,13 +5,14 @@
 | Слой | Что делает | Модули |
 |---|---|---|
 | Данные | MOEX ISS (котировки TQOB/TQCB, графики купонов/амортизаций/оферт, кривая zcyc, история цен и индексов), ключевая ставка ЦБ (SOAP), SQLite-кэш | `data/moex.py`, `data/cbr.py`, `data/cache.py` |
+| Кредитный анализ | Рейтинги АКРА / Эксперт РА / НКР (парсеры сайтов, единая шкала), отчётность РСБУ из ГИР БО ФНС (балл 0..100 и флаги), существенные факты e-disclosure (дефолты, реструктуризации), новостной фон (RSS Google/Bing/Интерфакс/РБК, словарь маркеров риска), секторы, модель справедливого спреда | `data/ratings*.py`, `data/financials.py`, `data/girbo.py`, `data/disclosure.py`, `data/news.py`, `data/sectors.py`, `analytics/fair_spread.py` |
 | Аналитика | Денежные потоки, YTM / доходность к оферте, дюрация Маколея и модифицированная, выпуклость, DV01, НКД, G-спред к кривой ОФЗ, roll-down | `analytics/bond_math.py`, `analytics/curve.py` |
-| Скринер | Фильтры (валюта, листинг, оборот, bid/ask, флоатеры, линкеры, амортизация, оферты, дистресс-спред) и композитный скор | `screener.py` |
-| Стратегии | `ladder`, `spread`, `rate_cycle`, `carry` — единый интерфейс «контекст → целевые веса» | `strategies/` |
-| Риск | Лимиты на бумагу / эмитента / долю корпоратов / дюрацию / долю дневного оборота, DV01, параметрический VaR | `risk.py` |
+| Скринер | Фильтры (валюта, листинг, оборот, bid/ask, флоатеры, линкеры, амортизация, оферты, дистресс-спред, минимальный рейтинг, стоп-факторы по отчётности / фактам / новостям) и композитный скор | `screener.py` |
+| Стратегии | `ladder`, `spread`, `rate_cycle`, `carry`, `value_hy` — единый интерфейс «контекст → целевые веса» | `strategies/` |
+| Риск | Лимиты на бумагу / эмитента / сектор / долю корпоратов / долю без рейтинга / дюрацию / долю дневного оборота, стоп по отчётности, DV01, параметрический VaR | `risk.py` |
 | Бэктест | Дневной событийный движок: купоны, амортизация, погашения, комиссия, проскальзывание, ребалансировка; метрики и сравнение с RGBITR/RUCBITR | `backtest/` |
 | Исполнение | Бумажный брокер (состояние в JSON) и T-Invest API (песочница/бой) через REST, журнал ордеров, dry-run по умолчанию | `execution/` |
-| CLI | `screen`, `curve`, `keyrate`, `bond`, `signals`, `trade`, `portfolio`, `backtest`, `sandbox-init` | `cli.py` |
+| CLI | `screen`, `curve`, `keyrate`, `bond`, `signals`, `trade`, `portfolio`, `backtest`, `sandbox-init`, `ratings`, `financials`, `disclosure`, `news` | `cli.py` |
 
 > **Это не инвестиционная рекомендация.** Система — инструмент для собственных решений. Любую стратегию сначала прогоняйте в бэктесте и песочнице T-Invest. Боевой режим включается только явно (`--broker tinvest --live --confirm` + подтверждение `YES`).
 
@@ -78,6 +79,7 @@ bondtrader portfolio --broker tinvest
 | `spread` | Покупка корпоратов с аномально широким G-спредом (z-оценка по истории спреда или кросс-секционно внутри корзины дюрации × уровня листинга), продажа при сжатии; ОФЗ-якорь ликвидности | `entry_z`, `exit_z`, `top_n`, `min_history`, `ofz_anchor`, `max_spread_bp` |
 | `rate_cycle` | Фаза цикла ЦБ (по последним решениям) и наклон кривой задают целевую дюрацию: смягчение → длинные ОФЗ, ужесточение → короткие + флоатеры, пауза при инверсии → средне-длинные | `short_dur`, `mid_dur`, `mid_long_dur`, `long_dur`, `band`, `top_n`, `floater_share` |
 | `carry` | Ожидаемая доходность за горизонт = YTW + roll-down по кривой; топ-N с гарантированной долей ОФЗ | `top_n`, `horizon`, `max_duration`, `ofz_min_share`, `per_unit_duration` |
+| `value_hy` | Недооценённые ВДО: композит из остатка G-спреда к справедливому (регрессия по рейтингу, дюрации, обороту, листингу), разрыва «балл отчётности − балл рейтинга», доходности за вычетом ожидаемых потерь (YTW − PD·LGD − ликвидность) и новостного фона; стоп-факторы по отчётности и фактам; равные веса + ядро в ОФЗ | `top_n`, `w_spread`, `w_fin`, `w_ret`, `w_news`, `lgd`, `min_coverage`, `max_duration`, `ofz_min_share` |
 
 Все стратегии реализуют `Strategy.targets(ctx) -> {secid: вес}`; добавить свою — унаследовать `Strategy` в `strategies/` и зарегистрировать в `STRATEGIES`.
 
@@ -89,9 +91,30 @@ bondtrader portfolio --broker tinvest
 * Плавающие купоны определяются по префиксу `SU29`, признакам в названии («ПК», «флоат», «КС+», «RUONIA») и по неизвестным будущим купонам в графике; для них YTM не считается.
 * Ключевая ставка: режим `easing` / `tightening`, если последнее изменение было не позже 120 дней назад, иначе `hold`.
 
+## Кредитный анализ: откуда берутся данные
+
+Четыре книги в `data/` (CSV, накапливаются, коммитятся в репозиторий или кэшируются в CI):
+
+| Книга | Команда | Источник | Откуда работает |
+|---|---|---|---|
+| `ratings.csv` | `bondtrader ratings fetch` | сайты АКРА, Эксперт РА, НКР | отовсюду (CI обновляет каждый прогон) |
+| `financials.csv` + `issuers.csv` | `bondtrader -c configs/hy.yaml financials fetch --from-screen` | ГИР БО ФНС (bo.nalog.ru, JSON-бэкенд SPA) | **только из РФ** (геоблок); кэш сырых ответов в `data/financials/` |
+| `disclosure.csv` | `bondtrader -c configs/hy.yaml disclosure fetch --from-screen [--browser]` | e-disclosure.ru, существенные факты | **из РФ**; при антибот-проверке — `--browser` (Playwright: `pip install "bondtrader[browser]" && playwright install chromium`) |
+| `news.csv` | `bondtrader -c configs/hy.yaml news fetch --from-screen [--general]` | Google News / Bing RSS по названию эмитента; общие ленты Интерфакс, РБК, Коммерсант, Финам | отовсюду |
+
+Как это попадает в решения:
+* скринер: `min_rating`, `require_rating`, `exclude_default_days` (свежий (тех)дефолт/реструктуризация — отсев), `min_fin_score`, `require_financials`, `news_stop_score` (свежая новость про дефолт/банкротство/обыски — отсев);
+* риск: `fin_hard_stops` (отрицательный капитал, покрытие процентов < 1 — не покупаем), `max_sector_share`, `max_unrated_share`;
+* стратегия `value_hy`: компоненты композита и их веса (см. `configs/hy.yaml`, веса подбираются по бэктесту);
+* `financials show <ИНН|название>`, `financials coverage`, `disclosure list --kind default tech_default`, `news show --query <эмитент>` — для ручной проверки.
+
+Балл отчётности (`data/financials.py`): 100 минус штрафы за отрицательный капитал (−45), операционный убыток (−25), покрытие процентов < 1.5 (−20), чистый долг/EBIT > 5 (−15), риск рефинансирования (короткий долг без подушки, −15), обязательства/капитал > 5 (−10), текущая ликвидность < 1 (−8), падение выручки/капитала > 20 % (−10/−8). Балл ≈ ступени рейтинга: ≥90 A, ≥75 BBB, ≥60 BB, ≥40 B, ниже — CCC.
+
+Все парсеры внешних сайтов — регулярные выражения над HTML/JSON, они ломаются при смене вёрстки; для каждого источника есть команда `discover`, печатающая, что реально отдаёт сайт.
+
 ## Риск-лимиты (config.yaml → `risk`)
 
-`max_weight_per_bond` (корпорат), `max_weight_per_bond_ofz`, `max_weight_per_issuer`, `max_corporate_share`, `min/max_portfolio_duration` (предупреждение), `max_g_spread_bp` (исключение дистресса), `max_turnover_share` (ордер не больше доли дневного оборота), `yield_vol_bp_daily` (σ доходностей для VaR). Жёсткие нарушения (нехватка денег, продажа без позиции) блокируют исполнение целиком; мягкие — режут веса и выводятся в отчёт.
+`max_weight_per_bond` (корпорат), `max_weight_per_bond_ofz`, `max_weight_per_issuer`, `max_sector_share`, `max_corporate_share`, `max_unrated_share`, `min_rating`, `fin_hard_stops`, `min/max_portfolio_duration` (предупреждение), `max_g_spread_bp` (исключение дистресса), `max_turnover_share` (ордер не больше доли дневного оборота), `yield_vol_bp_daily` (σ доходностей для VaR). Жёсткие нарушения (нехватка денег, продажа без позиции) блокируют исполнение целиком; мягкие — режут веса и выводятся в отчёт.
 
 ## Бэктест: что учтено и что нет
 
@@ -111,20 +134,24 @@ bond-trading/
 │   ├── portfolio.py         # позиции, сделки, купоны, NAV
 │   ├── risk.py              # лимиты, DV01, VaR, ордера из целевых весов
 │   ├── cli.py
-│   ├── analytics/           # bond_math.py, curve.py
-│   ├── data/                # moex.py, cbr.py, cache.py
-│   ├── strategies/          # base.py, ladder.py, spread.py, rate_cycle.py, carry.py
+│   ├── analytics/           # bond_math.py, curve.py, fair_spread.py
+│   ├── data/                # moex.py, cbr.py, cache.py, tls.py, ratings.py, ratings_web.py, financials.py, girbo.py, disclosure.py, news.py, sectors.py
+│   ├── strategies/          # base.py, ladder.py, spread.py, rate_cycle.py, carry.py, value_hy.py
 │   ├── backtest/            # engine.py, data.py, metrics.py
 │   └── execution/           # base.py, paper.py, tinvest.py, executor.py
 ├── tests/                   # pytest, офлайн на фикстурах формата MOEX ISS
 │   └── fixtures/make_fixtures.py   # генератор фикстур (цены согласованы с кривой)
+├── configs/                 # moderate.yaml (ОФЗ+качественные корпораты), hy.yaml (ВДО, максимальный риск)
+├── data/                    # книги: ratings.csv, financials.csv, issuers.csv, disclosure.csv, news.csv (кэш HTTP игнорируется git)
 ├── config.example.yaml
 └── pyproject.toml
 ```
 
 ## Ограничения текущей версии
 
-* Нет кредитных рейтингов (MOEX ISS их не отдаёт): качество эмитента аппроксимируется уровнем листинга и G-спредом. Подключение рейтингов АКРА/Эксперт РА — следующий шаг.
-* Ключ эмитента для лимитов концентрации — первое слово названия бумаги; для точности стоит подтянуть `EMITTER_ID` из `/iss/securities/{secid}.json`.
+* Рейтинги сопоставляются с бумагами по ISIN выпуска, `EMITTER_ID` и совпадению названия эмитента (покрытие скрина ~90–96 %); остаток закрывается псевдонимами в `ratings.csv`/`issuers.csv`.
+* ГИР БО и e-disclosure недоступны из-за рубежа (геоблок/антибот), поэтому книги отчётности и фактов заполняются локальным запуском из РФ и коммитятся; CI их только читает.
+* Вероятности дефолта по ступеням рейтинга в `value_hy` — ориентировочные константы, а веса компонент — стартовые: их надо калибровать по бэктесту с историческими книгами.
+* Ключ эмитента для лимитов концентрации — первое слово названия бумаги (ИНН используется, когда есть в `issuers.csv`).
 * T-Invest: цена ордера — в процентах от номинала, количество — в лотах; сопоставление secid ↔ uid идёт через `BondBy` по ISIN/тикеру. Хосты песочницы и боя различаются, в песочнице по умолчанию.
 * Сетевые вызовы к MOEX/ЦБ/T-Invest в тестах не выполняются — покрыты парсеры на сохранённых ответах и транспорт-заглушка.

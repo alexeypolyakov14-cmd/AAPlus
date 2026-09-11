@@ -10,7 +10,7 @@ on:
         description: "Стратегия для песочницы"
         type: choice
         default: carry
-        options: [carry, ladder, rate_cycle, spread]
+        options: [carry, value_hy, ladder, rate_cycle, spread]
       execute:
         description: "Реально отправить ордера в песочницу (иначе только dry-run)"
         type: boolean
@@ -61,11 +61,25 @@ jobs:
       - name: Разведка сайтов рейтинговых агентств (формы, пагинация, ajax)
         continue-on-error: true
         run: bondtrader ratings discover --deep
-      - name: Разведка ГИР БО и e-disclosure (отчётность эмитентов)
+      - name: Отчётность и факты — что доступно из CI (ГИР БО/e-disclosure геоблокированы, ожидаем понятный отказ)
         continue-on-error: true
         run: |
-          bondtrader financials discover --query "Балтийский лизинг"
-          bondtrader financials discover --query "7826705374"
+          python -c "from bondtrader.data.moex import MoexClient; d=MoexClient().security_description('RU000A1038M5'); print('ISS description keys:', sorted(d)); print({k:v for k,v in d.items() if 'INN' in k.upper() or 'EMITTER' in k.upper() or 'NAME' in k.upper()})"
+          bondtrader financials fetch --query 7826705374 || true
+          bondtrader disclosure discover --query "Балтийский лизинг" || true
+      - name: Новостной фон — источники и разбор
+        continue-on-error: true
+        run: bondtrader news discover --query "Балтийский лизинг"
+      - name: Книги новостей/отчётности из предыдущих прогонов (кэш)
+        uses: actions/cache@v4
+        with:
+          path: |
+            bond-trading/data/news.csv
+            bond-trading/data/financials.csv
+            bond-trading/data/issuers.csv
+            bond-trading/data/disclosure.csv
+          key: credit-books-${{ github.run_id }}
+          restore-keys: credit-books-
       - name: Книга рейтингов из предыдущих прогонов (кэш)
         uses: actions/cache@v4
         with:
@@ -78,10 +92,23 @@ jobs:
           bondtrader ratings fetch -v 2>&1 | grep -v DEBUG
           bondtrader ratings coverage | head -70
           bondtrader -c configs/hy.yaml screen --top 30
+      - name: Новости по эмитентам ВДО-скрина -> data/news.csv; покрытие отчётностью; целевой портфель value_hy
+        continue-on-error: true
+        run: |
+          bondtrader -c configs/hy.yaml news fetch --from-screen --general 2>&1 | tail -60
+          bondtrader -c configs/hy.yaml news list --negative --top 30
+          bondtrader -c configs/hy.yaml financials coverage | head -50
+          bondtrader -c configs/hy.yaml disclosure list --kind default tech_default restructuring | head -30
+          bondtrader -c configs/hy.yaml signals
       - uses: actions/upload-artifact@v4
         with:
-          name: ratings-csv
-          path: bond-trading/data/ratings.csv
+          name: credit-books
+          path: |
+            bond-trading/data/ratings.csv
+            bond-trading/data/news.csv
+            bond-trading/data/financials.csv
+            bond-trading/data/issuers.csv
+            bond-trading/data/disclosure.csv
           if-no-files-found: ignore
       - name: Сигналы стратегий
         run: |
@@ -134,6 +161,16 @@ jobs:
           path: bond-trading/data/ratings.csv
           key: ratings-csv-none
           restore-keys: ratings-csv-
+      - name: Книги новостей/отчётности (кэш)
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            bond-trading/data/news.csv
+            bond-trading/data/financials.csv
+            bond-trading/data/issuers.csv
+            bond-trading/data/disclosure.csv
+          key: credit-books-none
+          restore-keys: credit-books-
       - name: Счёт песочницы
         run: bondtrader sandbox-init --amount 1000000
       - name: Портфель до
