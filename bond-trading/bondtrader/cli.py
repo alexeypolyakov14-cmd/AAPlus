@@ -859,45 +859,6 @@ def cmd_financials(args, settings):
               f"текущая ликвидность {f(m.current_ratio)}  деньги/короткий долг {f(m.cash_to_short_debt)}")
         print("  флаги: " + ("; ".join(m.flags) if m.flags else "нет"))
         return
-    if args.action == "audit":
-        # единый источник: у кого из скрина есть рейтинг Эксперт РА, у кого только запасной, где агентства расходятся, где запись старая
-        from .data.ratings import GRADE
-        snap = load_snapshot(settings, args.fixtures)
-        rows = [r for r in _screen(snap, settings, args) if not r.bond.is_ofz]
-        recs = []
-        seen_issuers = set()
-        for r in rows:
-            key = r.bond.issuer_key
-            if key in seen_issuers:
-                continue
-            seen_issuers.add(key)
-            latest = book.latest_by_agency(r.bond)
-            prim = latest.get(book.primary)
-            chosen = r.rating
-            grades = {ag: GRADE.get(x.rating) for ag, x in latest.items() if GRADE.get(x.rating) is not None}
-            spread_notches = (max(grades.values()) - min(grades.values())) if len(grades) >= 2 else 0
-            age = (snap.settle - chosen.date).days if chosen is not None and chosen.date else None
-            flags = []
-            if chosen is None:
-                flags.append("нет рейтинга")
-            elif prim is None:
-                flags.append(f"нет у {book.primary}, взят {chosen.agency}")
-            if spread_notches >= 2:
-                flags.append(f"агентства расходятся на {spread_notches} ступ.")
-            if age is not None and age > 365:
-                flags.append(f"запись старше года ({age} дн.)")
-            recs.append({"issuer": key, "name": r.bond.name, "rating": chosen.rating if chosen else "—", "agency": chosen.agency if chosen else "",
-                         "date": chosen.date if chosen else None, "others": "; ".join(f"{ag} {x.rating}" for ag, x in latest.items() if chosen is None or ag != chosen.agency),
-                         "flags": "; ".join(flags)})
-        df = pd.DataFrame(recs)
-        n_prim = sum(1 for x in recs if x["agency"] == book.primary)
-        n_fb = sum(1 for x in recs if x["agency"] and x["agency"] != book.primary)
-        n_none = sum(1 for x in recs if not x["agency"])
-        print(f"Эмитентов в скрине: {len(recs)}; рейтинг {book.primary}: {n_prim}; только запасное агентство: {n_fb}; без рейтинга: {n_none}")
-        if args.problems:
-            df = df[df["flags"] != ""]
-        _print_df(df.sort_values(["flags", "issuer"], ascending=[False, True]), csv=args.csv)
-        return
     if args.action == "coverage":
         snap = load_snapshot(settings, args.fixtures)
         rows = _screen(snap, settings, args)

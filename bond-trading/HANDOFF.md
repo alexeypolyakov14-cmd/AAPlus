@@ -11,7 +11,7 @@ PR не создавать без просьбы. Секреты (T-Invest, Tele
 Запуск разовой команды: `mcp__github__actions_run_trigger(run_workflow, workflow_id=bond-trading.yml, ref=<ветка>,
 inputs={"cmd": "<аргументы bondtrader>"})` — job «Разовая команда под профилем hy», профиль `configs/hy.yaml`.
 Вывод: `list_workflow_jobs` → job id → `get_job_logs(job_id, return_content=true, tail_lines=N)`.
-`inputs.lookup="НЛМК"` = `bondtrader why`. Аргументы с пробелами в `cmd` не работают (word-split).
+`inputs.lookup="НЛМК"` = `bondtrader why`. Аргументы с пробелами в `cmd` берутся в кавычки: `peers "Балтийский лизинг"` (шаг разбирает строку через xargs).
 Другие галочки dispatch: `daily` (отчёт в Telegram), `bot` (+`bot_menu`), `telegram_setup`, `smoke` (долгий живой прогон, ~35 мин),
 `execute` + strategy/profile (ребалансировка песочницы T-Invest).
 

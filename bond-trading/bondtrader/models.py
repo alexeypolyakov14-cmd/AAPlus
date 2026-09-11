@@ -107,7 +107,7 @@ class Bond:
         if self.is_ofz:
             return "МИНФИН"
         if self.full_name:
-            key = issuer_key_of(self.full_name, words=2)
+            key = issuer_key_of_full(self.full_name, words=2)
             if len(key) >= 3:
                 return key
         return issuer_key_of(self.name or self.secid)
@@ -116,6 +116,31 @@ class Bond:
 _ISSUER_PREFIX_RE = re.compile(r"^[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё ]*")
 _SERIES_TAIL_RE = re.compile(r"\s*(ПБО|БО|БП|ПБ|П|Б|Р)$")
 _LEGAL_FORMS = {"ПАО", "АО", "ООО", "МКПАО", "ЗАО", "ОАО", "НКО", "ЛК", "ГК", "ТД", "ПКО", "МФК", "МКК", "АКБ", "КБ", "ИК", "УК", "СК", "ФК"}
+# буквенные префиксы маркеров серии в полном имени MOEX: «БО-П16», «ПБО-08», «ЗО28-1-Р», «СУБ-Т1-Р1», «Sb42R», «ПК» (флоатер)
+_SERIES_PREFIXES = {"БО", "ПБО", "БП", "ПБ", "П", "Б", "Р", "ЗО", "СУБ", "Т", "ПК", "SB", "BO", "SUB", ""}
+
+
+def _is_series_token(tok: str) -> bool:
+    """Маркер серии/выпуска, а не слово имени: начинается с цифры или с известного префикса перед цифрой/дефисом."""
+    m = re.match(r"^([A-Za-zА-Яа-яЁё]*)[-]?[0-9]", tok)
+    if m:
+        return m.group(1).upper() in _SERIES_PREFIXES
+    return tok.upper() in _SERIES_PREFIXES - {""}
+
+
+def issuer_key_of_full(full_name: str, words: int = 2) -> str:
+    """Ключ эмитента из полного имени MOEX («ПАО "ТГК-14" 001Р-02» → «ТГК-14», «А101 БО-001Р-03» → «А101»):
+    кавычки и ОПФ убираем, номер в имени оставляем, маркеры серии отбрасываем; не больше N слов."""
+    s = re.sub(r"[«»\"()]", " ", (full_name or "").replace("'", ""))
+    toks = []
+    for t in s.split():
+        t = t.strip(",.;:")
+        # серия, приклеенная к имени без пробела: «Аэрофьюэлз-002Р-04», «Аэрофьюэлз002Р-06» → «Аэрофьюэлз»
+        t = re.sub(r"(?<=[A-Za-zА-Яа-яЁё]{3})-?[0-9]{3,}.*$", "", t)
+        if not t or not re.search(r"[A-Za-zА-Яа-яЁё]", t) or t.upper() in _LEGAL_FORMS or _is_series_token(t):
+            continue
+        toks.append(t)
+    return " ".join(toks[:words] if words else toks).upper().rstrip(",.-")
 
 
 def issuer_key_of(name: str, words: int = 0) -> str:

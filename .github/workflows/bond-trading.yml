@@ -348,8 +348,8 @@ jobs:
         if: env.CMD != ''
         run: |
           set -o pipefail
-          # shellcheck disable=SC2086
-          bondtrader $CMD | tee -a "$GITHUB_STEP_SUMMARY"
+          # xargs разбирает кавычки без интерпретации шеллом: peers "Балтийский лизинг" доходит одним аргументом
+          printf '%s\n' "$CMD" | xargs bondtrader | tee -a "$GITHUB_STEP_SUMMARY"
 
   sandbox:
     name: Песочница T-Invest (ручной запуск, нужен секрет TINVEST_TOKEN)

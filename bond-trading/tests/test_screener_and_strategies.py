@@ -226,6 +226,18 @@ def test_issuer_key_prefers_full_name_without_legal_forms():
     assert Bond("C", name="Роделен2P3", full_name="ЛК Роделен БО 002P-03").issuer_key == "РОДЕЛЕН"
 
 
+def test_issuer_key_keeps_numbers_in_names_and_drops_series():
+    """Номер — часть имени (ТГК-14, А101), кавычки/ОПФ/серии — нет: раньше выходили ключи «ПАО», «А», «ТГК», «ИКС»."""
+    from bondtrader.models import Bond, issuer_key_of_full
+    assert Bond("A", name="ТГК-14 1Р2", full_name='ПАО "ТГК-14" 001Р-02').issuer_key == "ТГК-14"
+    assert Bond("B", name="ТГК-14 1Р5", full_name="ТГК-14 001Р-06").issuer_key == "ТГК-14"
+    assert issuer_key_of_full("А101 БО-001Р-03") == "А101"
+    assert issuer_key_of_full("Банк ВТБ СУБ-Т1-Р1") == "БАНК ВТБ" and issuer_key_of_full("РЖД ОАО ЗО28-1-Р") == "РЖД"
+    assert issuer_key_of_full("Аэрофьюэлз-002Р-04") == issuer_key_of_full("Аэрофьюэлз002Р-06") == issuer_key_of_full("Аэрофьюэлз 002Р-05") == "АЭРОФЬЮЭЛЗ"
+    assert issuer_key_of_full("О'КЕЙ ООО 001P-06") == "ОКЕЙ" and issuer_key_of_full("Сбер Sb42R") == "СБЕР"
+    assert issuer_key_of_full("Трансмашхолдинг АО ПБО-08") == "ТРАНСМАШХОЛДИНГ" and issuer_key_of_full("ГПБ (АО) БО 005Р-02Р") == "ГПБ"
+
+
 def test_gspread_peers_ranking():
     from bondtrader.data.ratings import Rating
     from bondtrader.models import Bond, BondMetrics, Quote

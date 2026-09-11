@@ -274,6 +274,24 @@ def test_issuer_same_allows_one_extra_subject_word():
     assert issuer_same("ООО «СГ РУС»", "РусГидро БО-002Р-13") == 0
 
 
+def test_numbered_names_and_mfo_qualifiers_are_distinct():
+    """ТГК-1 ≠ ТГК-14 (номер — часть имени), МФК «ПСБ Финанс» ≠ ПАО «ПСБ»: реестр Эксперт РА давал ТГК-14 рейтинг AAA
+    от ТГК-1, а Промсвязьбанку — A+ микрофинансовой «дочки»."""
+    from bondtrader.data.ratings import Rating, RatingsBook, issuer_same, issuer_tokens
+    from bondtrader.models import Bond
+    assert issuer_tokens("ПАО «ТГК-14»") == ["тгк-14"] and issuer_tokens('ПАО "ТГК-1"') == ["тгк-1"]
+    assert issuer_same('ПАО "ТГК-1"', "ТГК-14 001Р-06") == 0
+    assert issuer_same("ПАО «ТГК-14»", 'ПАО "ТГК-14" 001Р-02') == 1.0
+    assert issuer_same('ООО МФК "ПСБ ФИНАНС"', 'ПАО "ПСБ" 004P-01') == 0
+    assert issuer_same('ООО МФК "ПСБ ФИНАНС"', "МФК ПСБ Финанс 002P-02") == 1.0
+    assert issuer_tokens("Балтийский лизинг ООО БО-П16") == ["балтийский", "лизинг"]   # серии с цифрами по-прежнему не слова
+    book = RatingsBook([Rating('ПАО "ТГК-1"', "Эксперт РА", "AAA", kind="issuer"), Rating("ПАО «ТГК-14»", "НКР", "BBB", kind="issuer"),
+                        Rating('ООО МФК "ПСБ ФИНАНС"', "Эксперт РА", "A+", kind="issuer")])
+    assert book.lookup(Bond("A", name="ТГК-14 1Р5", full_name="ТГК-14 001Р-05")).rating == "BBB"
+    assert book.lookup(Bond("B", name="ПСБ 4P-01", full_name='ПАО "ПСБ" 004P-01')) is None
+    assert book.lookup(Bond("C", name="ПСБ Фин2P2", full_name="МФК ПСБ Финанс 002P-02")).rating == "A+"
+
+
 def test_primary_agency_policy():
     from datetime import date
     from bondtrader.data.ratings import Rating, RatingsBook
