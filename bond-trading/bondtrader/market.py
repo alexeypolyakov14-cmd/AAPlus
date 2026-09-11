@@ -13,6 +13,7 @@ from .config import Settings
 from .data.cache import SqliteCache
 from .data.cbr import KeyRateView, analyze_keyrate, fetch_keyrate_history, parse_keyrate_xml
 from .data.moex import MoexClient, parse_board_securities
+from .data.ratings import RatingsBook
 from .models import Bond, Quote
 from .screener import build_curve
 
@@ -28,11 +29,23 @@ class MarketSnapshot:
     keyrate_history: list[tuple[date, float]] = field(default_factory=list)
     enrich: Optional[Callable[[Bond], Bond]] = None
     source: str = "moex"
+    ratings: Optional[RatingsBook] = None
+
+
+def load_ratings(settings: Settings) -> Optional[RatingsBook]:
+    path = settings.get("data", "ratings_csv", default="")
+    if not path:
+        return None
+    book = RatingsBook.from_csv(path, conservative=settings.get("data", "ratings_conservative", default=True))
+    return book if len(book) else None
 
 
 def load_snapshot(settings: Settings, fixtures_dir: Optional[str] = None, client: Optional[MoexClient] = None) -> MarketSnapshot:
+    ratings = load_ratings(settings)
     if fixtures_dir:
-        return _load_fixtures(fixtures_dir)
+        snap = _load_fixtures(fixtures_dir)
+        snap.ratings = ratings
+        return snap
     cache = SqliteCache(settings.get("data", "cache_path", default="data/cache/http_cache.sqlite"))
     client = client or MoexClient(cache=cache)
     boards = settings.get("data", "boards", default=["TQOB", "TQCB"])
@@ -59,7 +72,7 @@ def load_snapshot(settings: Settings, fixtures_dir: Optional[str] = None, client
         kr = analyze_keyrate(kr_hist) if kr_hist else None
     except Exception as e:  # noqa: BLE001
         log.warning("ключевая ставка ЦБ недоступна: %s", e)
-    return MarketSnapshot(today, universe, curve, kr, kr_hist, enrich=client.enrich, source="moex")
+    return MarketSnapshot(today, universe, curve, kr, kr_hist, enrich=client.enrich, source="moex", ratings=ratings)
 
 
 def _load_fixtures(d: str) -> MarketSnapshot:

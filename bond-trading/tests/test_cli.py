@@ -74,3 +74,19 @@ def test_config_params_apply_only_to_same_strategy(capsys, cfg, tmp_path):
     from bondtrader.strategies import make_strategy
     st = make_strategy("ladder", {"top_n": 3, "per_bucket": 2})
     assert st.per_bucket == 2
+
+
+def test_ratings_commands(capsys, cfg, tmp_path):
+    csv = tmp_path / "ratings.csv"
+    csv.write_text("subject,agency,rating,date,kind,isin,emitter_id,alias\nСбер,АКРА,AAA(RU),2025-01-01,issuer,,,Сбер\n", encoding="utf-8")
+    c = tmp_path / "c.yaml"
+    c.write_text(f"data:\n  ratings_csv: {csv}\n", encoding="utf-8")
+    out = run(capsys, "--fixtures", FIX, "-c", str(c), "ratings", "list")
+    assert "1 записей" in out and "Сбер" in out
+    out = run(capsys, "--fixtures", FIX, "-c", str(c), "ratings", "show", "RU000A106K43")
+    assert "AAA (АКРА" in out
+    out = run(capsys, "--fixtures", FIX, "-c", str(c), "ratings", "coverage")
+    assert "без рейтинга" in out and "RU000A107RZ0" in out
+    out = run(capsys, "--fixtures", FIX, "-c", str(c), "screen", "--min-rating", "AA")
+    assert "RU000A106K43" in out and "RU000A107RZ0" in out  # без рейтинга не отсекаются
+    assert "Рейтинги: 1 записей" in out

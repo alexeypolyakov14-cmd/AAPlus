@@ -4,6 +4,7 @@
 
 data:
   boards: [TQOB, TQCB]
+  ratings_csv: data/ratings.csv
 
 screener:
   currency: SUR
@@ -16,6 +17,7 @@ screener:
   max_bid_ask_pct: 0.7
   max_g_spread_bp: 800
   min_price: 60
+  min_rating: BBB+             # умеренный профиль: не ниже BBB+
 
 risk:
   max_weight_per_bond: 0.08       # корпоративная бумага ≤ 8% (≈1 млн при 12 млн)
@@ -27,6 +29,8 @@ risk:
   max_g_spread_bp: 600            # без «мусорных» спредов
   max_turnover_share: 0.05
   yield_vol_bp_daily: 15
+  max_unrated_share: 0.15
+  min_rating: BBB+
 
 strategy:
   name: carry

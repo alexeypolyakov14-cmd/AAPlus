@@ -10,6 +10,7 @@ import pandas as pd
 
 from .analytics.bond_math import compute_metrics
 from .analytics.curve import ZeroCurve
+from .data.ratings import Rating, RatingsBook, rating_at_least
 from .models import Bond, BondMetrics, Quote
 
 
@@ -20,10 +21,15 @@ class ScreenRow:
     metrics: BondMetrics
     score: float = 0.0
     flags: list[str] = field(default_factory=list)
+    rating: Optional[Rating] = None
 
     @property
     def secid(self) -> str:
         return self.bond.secid
+
+    @property
+    def rating_str(self) -> str:
+        return f"{self.rating.rating} ({self.rating.agency})" if self.rating else "—"
 
     def as_dict(self) -> dict:
         m = self.metrics
@@ -35,8 +41,8 @@ class ScreenRow:
             "mod_dur": round(m.modified_duration, 2), "g_spread": None if m.g_spread is None else round(m.g_spread),
             "cur_yield": round(m.current_yield, 2), "years": round(m.years_to_maturity, 2),
             "turnover_mln": round(self.quote.turnover / 1e6, 1), "bid_ask_pct": self.quote.bid_ask_spread_pct,
-            "maturity": self.bond.maturity, "offer": self.bond.offer_date, "score": round(self.score, 3),
-            "flags": ",".join(self.flags),
+            "maturity": self.bond.maturity, "offer": self.bond.offer_date, "rating": self.rating_str,
+            "score": round(self.score, 3), "flags": ",".join(self.flags),
         }
 
 
@@ -59,6 +65,8 @@ class ScreenerConfig:
     issuer_blacklist: list[str] = field(default_factory=list)
     ofz_only: bool = False
     corporate_only: bool = False
+    min_rating: str = ""             # напр. "BB-": бумаги с худшим рейтингом отсеиваются
+    require_rating: bool = False     # без рейтинга — отсев (ОФЗ считаются AAA)
 
     @classmethod
     def from_dict(cls, d: dict) -> "ScreenerConfig":
@@ -116,15 +124,30 @@ class Screener:
         return None
 
     def run(self, universe: list[tuple[Bond, Quote]], curve: Optional[ZeroCurve], settle: date,
-            enrich: Optional[Callable[[Bond], Bond]] = None) -> list[ScreenRow]:
-        """universe — пары (Bond, Quote); enrich — функция подгрузки графика (например MoexClient.enrich)."""
+            enrich: Optional[Callable[[Bond], Bond]] = None, ratings: Optional[RatingsBook] = None) -> list[ScreenRow]:
+        """universe — пары (Bond, Quote); enrich — функция подгрузки графика (например MoexClient.enrich);
+        ratings — книга рейтингов (ОФЗ считаются AAA)."""
         rows: list[ScreenRow] = []
         self.rejected = {}
+        c = self.cfg
         for bond, quote in universe:
             why = self._prefilter(bond, quote, settle)
             if why:
                 self.rejected[bond.secid] = why
                 continue
+            rating: Optional[Rating] = None
+            if bond.is_ofz:
+                rating = Rating("Минфин России", "—", "AAA", kind="issuer")
+            elif ratings is not None:
+                rating = ratings.lookup(bond)
+            if c.min_rating or c.require_rating:
+                if rating is None:
+                    if c.require_rating:
+                        self.rejected[bond.secid] = "нет рейтинга"
+                        continue
+                elif c.min_rating and not rating_at_least(rating.rating, c.min_rating):
+                    self.rejected[bond.secid] = f"рейтинг {rating.rating} ниже {c.min_rating}"
+                    continue
             if enrich is not None and not bond.has_full_schedule:
                 bond = enrich(bond)  # полный график купонов/амортизаций/оферт — иначе YTM расходится с биржевым
             m = compute_metrics(bond, quote, settle, curve)
@@ -153,7 +176,9 @@ class Screener:
                 flags.append("флоатер")
             if quote.ytm_moex and abs(quote.ytm_moex - m.ytm) > 1.0:
                 flags.append(f"расхождение с YTM MOEX {quote.ytm_moex:.1f}")
-            rows.append(ScreenRow(bond, quote, m, flags=flags))
+            if not bond.is_ofz and rating is None and ratings is not None:
+                flags.append("без рейтинга")
+            rows.append(ScreenRow(bond, quote, m, flags=flags, rating=rating))
         self._score(rows)
         rows.sort(key=lambda r: r.score, reverse=True)
         return rows

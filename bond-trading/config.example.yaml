@@ -2,6 +2,8 @@
 data:
   boards: [TQOB, TQCB]         # TQOB — ОФЗ/субфеды, TQCB — корпоративные
   cache_path: data/cache/http_cache.sqlite
+  ratings_csv: data/ratings.csv   # книга рейтингов (см. configs/ratings.example.csv)
+  ratings_conservative: true      # при нескольких агентствах брать худший рейтинг
 
 screener:
   currency: SUR
@@ -19,6 +21,8 @@ screener:
   max_g_spread_bp: 1500        # выше — дистресс, не наш профиль
   min_price: 50
   issuer_blacklist: []
+  min_rating: ""               # напр. BB-: бумаги хуже отсеиваются; ОФЗ = AAA
+  require_rating: false        # true — бумаги без рейтинга отсеиваются
 
 risk:
   max_weight_per_bond: 0.10       # корпоративная бумага
@@ -30,6 +34,8 @@ risk:
   max_g_spread_bp: 800
   max_turnover_share: 0.05     # наш ордер не больше 5% дневного оборота
   yield_vol_bp_daily: 15       # для параметрического VaR
+  max_unrated_share: 1.0       # доля бумаг без рейтинга в целевом портфеле
+  min_rating: ""
 
 strategy:
   name: carry                  # ladder | spread | rate_cycle | carry

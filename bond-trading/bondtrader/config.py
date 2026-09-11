@@ -12,6 +12,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "boards": ["TQOB", "TQCB"],
         "cache_path": "data/cache/http_cache.sqlite",
         "keyrate_from": "2013-09-13",
+        "ratings_csv": "data/ratings.csv",
+        "ratings_conservative": True,
     },
     "screener": {
         "currency": "SUR",
@@ -29,6 +31,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_g_spread_bp": 1500,
         "min_price": 50.0,
         "issuer_blacklist": [],
+        "min_rating": "",
+        "require_rating": False,
     },
     "risk": {
         "max_weight_per_bond": 0.10,
@@ -40,6 +44,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_g_spread_bp": 800,
         "max_turnover_share": 0.05,
         "yield_vol_bp_daily": 15.0,
+        "max_unrated_share": 1.0,
+        "min_rating": "",
     },
     "strategy": {
         "name": "carry",

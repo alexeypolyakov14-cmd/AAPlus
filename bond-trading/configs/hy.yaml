@@ -5,6 +5,7 @@
 
 data:
   boards: [TQOB, TQCB]
+  ratings_csv: data/ratings.csv
 
 screener:
   currency: SUR
@@ -19,6 +20,8 @@ screener:
   max_bid_ask_pct: 1.5
   max_g_spread_bp: 2500        # выше — рынок закладывает дефолт
   min_price: 70                # цена ниже 70 — тоже признак дистресса
+  min_rating: B                # ниже B — преддефолт; ВДО живут в BB+…B
+  require_rating: false        # пока книга рейтингов неполная — без рейтинга не отсекаем, но ограничиваем долю
 
 risk:
   max_weight_per_bond: 0.04       # ≈500 тыс. при 12 млн
@@ -30,6 +33,8 @@ risk:
   max_g_spread_bp: 2000
   max_turnover_share: 0.05
   yield_vol_bp_daily: 40          # спреды ВДО ходят сильнее ОФЗ
+  max_unrated_share: 0.25         # не более четверти портфеля в бумагах без рейтинга
+  min_rating: B
 
 strategy:
   name: carry

@@ -58,6 +58,9 @@ jobs:
         run: bondtrader screen --top 25 -v
       - name: Карточка ОФЗ 26238 с графиком
         run: bondtrader bond SU26238RMFS4 --schedule -v
+      - name: Разведка сайтов рейтинговых агентств (структура страниц)
+        continue-on-error: true
+        run: bondtrader ratings discover
       - name: Сигналы стратегий
         run: |
           bondtrader signals -s carry

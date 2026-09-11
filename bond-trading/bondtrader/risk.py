@@ -5,6 +5,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Optional
 
+from .data.ratings import rating_at_least
 from .portfolio import Order, Portfolio
 from .screener import ScreenRow
 
@@ -21,6 +22,8 @@ class RiskLimits:
     max_turnover_share: float = 0.05
     yield_vol_bp_daily: float = 15.0
     min_list_level: int = 2  # допускаем уровни 1..min_list_level
+    max_unrated_share: float = 1.0   # доля портфеля в бумагах без рейтинга (1.0 — без ограничения)
+    min_rating: str = ""             # худший допустимый рейтинг для целевых весов
 
     @classmethod
     def from_dict(cls, d: dict) -> "RiskLimits":
@@ -62,6 +65,8 @@ class RiskManager:
                 continue
             if r.bond.list_level and r.bond.list_level > L.min_list_level:
                 continue
+            if L.min_rating and r.rating is not None and not rating_at_least(r.rating.rating, L.min_rating):
+                continue
             out.append(r)
         return out
 
@@ -82,6 +87,9 @@ class RiskManager:
             if row.bond.list_level and row.bond.list_level > L.min_list_level:
                 notes.append(Violation("listing", f"{secid}: уровень листинга {row.bond.list_level}", secid))
                 continue
+            if L.min_rating and row.rating is not None and not rating_at_least(row.rating.rating, L.min_rating):
+                notes.append(Violation("rating", f"{secid}: рейтинг {row.rating.rating} ниже {L.min_rating}", secid))
+                continue
             cap = L.max_weight_per_bond_ofz if row.bond.is_ofz else L.max_weight_per_bond
             if w > cap:
                 notes.append(Violation("bond_cap", f"{secid}: вес {w:.1%} обрезан до {cap:.0%}", secid, hard=False))
@@ -101,6 +109,15 @@ class RiskManager:
                 for i in ids:
                     out[i] *= k
                 notes.append(Violation("issuer_cap", f"{issuer}: доля {tot:.1%} обрезана до {L.max_weight_per_issuer:.0%}", hard=False))
+
+        # доля бумаг без рейтинга
+        unrated = [s for s in out if not rows[s].bond.is_ofz and rows[s].rating is None]
+        un_share = sum(out[s] for s in unrated)
+        if un_share > L.max_unrated_share + 1e-9:
+            k = L.max_unrated_share / un_share
+            for s in unrated:
+                out[s] *= k
+            notes.append(Violation("unrated", f"доля бумаг без рейтинга {un_share:.1%} обрезана до {L.max_unrated_share:.0%}", hard=False))
 
         # доля корпоративного сегмента
         corp = [s for s in out if not rows[s].bond.is_ofz]

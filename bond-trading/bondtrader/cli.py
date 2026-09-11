@@ -22,7 +22,7 @@ pd.set_option("display.width", 200)
 pd.set_option("display.max_columns", 30)
 pd.set_option("display.max_rows", 500)
 
-SCREEN_COLS = ["secid", "name", "level", "price", "ytm", "ytm_offer", "yield_worst", "duration", "g_spread", "cur_yield",
+SCREEN_COLS = ["secid", "name", "level", "rating", "price", "ytm", "ytm_offer", "yield_worst", "duration", "g_spread", "cur_yield",
                "turnover_mln", "maturity", "score", "flags"]
 
 
@@ -66,8 +66,10 @@ def _screen(snap: MarketSnapshot, settings: Settings, args) -> list[ScreenRow]:
         cfg.min_turnover = args.min_turnover
     if getattr(args, "max_duration", None) is not None:
         cfg.max_duration = args.max_duration
+    if getattr(args, "min_rating", None):
+        cfg.min_rating = args.min_rating
     scr = Screener(cfg)
-    rows = scr.run(snap.universe, snap.curve, snap.settle, enrich=snap.enrich)
+    rows = scr.run(snap.universe, snap.curve, snap.settle, enrich=snap.enrich, ratings=snap.ratings)
     if getattr(args, "verbose", False):
         rej = pd.Series(scr.rejected).value_counts()
         print("Отсев по причинам:\n" + rej.to_string(), file=sys.stderr)
@@ -89,7 +91,8 @@ def _print_df(df: pd.DataFrame, cols: Optional[list[str]] = None, csv: Optional[
 def _header(snap: MarketSnapshot) -> None:
     kr = f"{snap.keyrate.current:.2f}% ({snap.keyrate.regime})" if snap.keyrate else "н/д"
     cv = f"{snap.curve.source}, 1Y {snap.curve.yield_at(1):.2f}% / 10Y {snap.curve.yield_at(10):.2f}%" if snap.curve else "н/д"
-    print(f"Дата: {snap.settle}  Источник: {snap.source}  Бумаг: {len(snap.universe)}  Ключевая ставка: {kr}  Кривая: {cv}\n")
+    rt = f"{len(snap.ratings)} записей" if snap.ratings else "нет"
+    print(f"Дата: {snap.settle}  Источник: {snap.source}  Бумаг: {len(snap.universe)}  Ключевая ставка: {kr}  Кривая: {cv}  Рейтинги: {rt}\n")
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +346,42 @@ def cmd_sandbox_init(args, settings):
           f"Если счетов несколько — укажите id в config.yaml -> execution.tinvest.account_id")
 
 
+def cmd_ratings(args, settings):
+    from .data.ratings import RatingsBook
+    if args.action == "discover":
+        from .data.ratings_web import discover
+        discover(args.names)
+        return
+    book = RatingsBook.from_csv(settings.get("data", "ratings_csv", default="data/ratings.csv"))
+    if args.action == "show":
+        snap = load_snapshot(settings, args.fixtures)
+        pair = next(((b, q) for b, q in snap.universe if b.secid == args.secid.upper() or b.isin == args.secid.upper()), None)
+        if not pair:
+            raise SystemExit(f"{args.secid}: не найдена")
+        bond = pair[0]
+        r = book.lookup(bond)
+        print(f"{bond.secid} {bond.name}: {r.rating + ' (' + r.agency + (', ' + str(r.date) if r.date else '') + ')' if r else 'рейтинг не найден'}")
+        cands = book.candidates(bond)
+        if len(cands) > 1:
+            print("Все записи: " + "; ".join(f"{c.agency} {c.rating} {c.date or ''}" for c in cands))
+        return
+    if args.action == "list":
+        print(f"Книга рейтингов: {len(book)} записей")
+        print(pd.DataFrame([{"subject": r.subject, "agency": r.agency, "rating": r.rating, "date": r.date, "kind": r.kind,
+                             "isin": r.isin, "alias": r.alias} for r in book.all]).to_string(index=False) if len(book) else "(пусто)")
+        return
+    if args.action == "coverage":
+        snap = load_snapshot(settings, args.fixtures)
+        rows = _screen(snap, settings, args)
+        rated = [r for r in rows if r.rating is not None]
+        print(f"В скрине {len(rows)} бумаг, с рейтингом {len(rated)}, без рейтинга {len(rows) - len(rated)}")
+        missing = [r for r in rows if r.rating is None]
+        if missing:
+            print("Без рейтинга (для добавления alias в CSV):")
+            print(pd.DataFrame([{"secid": r.secid, "name": r.bond.name, "isin": r.bond.isin, "ytw": round(r.metrics.yield_worst, 2)} for r in missing]).to_string(index=False))
+        return
+
+
 def cmd_strategies(args, settings):
     for name, cls in STRATEGIES.items():
         doc = (cls.__doc__ or "").strip().splitlines()[0]
@@ -371,6 +410,7 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--include-floaters", action="store_true")
         sp.add_argument("--min-turnover", type=float)
         sp.add_argument("--max-duration", type=float)
+        sp.add_argument("--min-rating", help="минимальный рейтинг, напр. BB-")
 
     def strat_opts(sp):
         sp.add_argument("--strategy", "-s", choices=list(STRATEGIES))
@@ -382,6 +422,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("keyrate", parents=[common], help="ключевая ставка ЦБ и фаза цикла"); sp.set_defaults(fn=cmd_keyrate)
     sp = sub.add_parser("bond", parents=[common], help="карточка облигации"); sp.add_argument("secid"); sp.add_argument("--schedule", action="store_true"); sp.set_defaults(fn=cmd_bond)
     sp = sub.add_parser("strategies", parents=[common], help="список стратегий"); sp.set_defaults(fn=cmd_strategies)
+    sp = sub.add_parser("ratings", parents=[common], help="кредитные рейтинги: list | show SECID | coverage | discover")
+    sp.add_argument("action", choices=["list", "show", "coverage", "discover"]); sp.add_argument("secid", nargs="?")
+    sp.add_argument("--names", nargs="*", help="для discover: какие источники смотреть"); screen_opts(sp); sp.set_defaults(fn=cmd_ratings)
     sp = sub.add_parser("signals", parents=[common], help="целевой портфель и ордера по стратегии"); screen_opts(sp); strat_opts(sp)
     sp.add_argument("--broker", choices=["paper", "tinvest"]); sp.add_argument("--csv"); sp.set_defaults(fn=cmd_signals)
     sp = sub.add_parser("trade", parents=[common], help="исполнить ребалансировку через брокера"); screen_opts(sp); strat_opts(sp)
