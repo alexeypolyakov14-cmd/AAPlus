@@ -1,0 +1,76 @@
+# Профиль «корзина ступени A»: 5–8 имён с рейтингом A-/A/A+, премия 100–300 б.п. к своей ступени,
+# ровная история спреда, разные отрасли. Лимиты под концентрированный портфель (до 20% на имя).
+# Используется для бэктеста корзины: bondtrader -c configs/a_grade.yaml backtest --universe ... --curves
+# Важно: в бэктесте книги рейтингов нет, поэтому max_unrated_share = 1.0, иначе лимит обрежет весь портфель.
+
+data:
+  boards: [TQOB, TQCB]
+  ratings_csv: data/ratings.csv
+  financials_csv: data/financials.csv
+  issuers_csv: data/issuers.csv
+  disclosure_csv: data/disclosure.csv
+  news_csv: data/news.csv
+  history_days: 90
+  zcyc_history_json: data/zcyc_history.json
+
+screener:
+  currency: SUR
+  min_ytm: 0
+  max_ytm: 60
+  min_duration: 0.3
+  max_duration: 4.0
+  min_turnover: 1000000
+  max_list_level: 3
+  exclude_floaters: true
+  exclude_linkers: true
+  exclude_structured: true
+  max_bid_ask_pct: 2.0
+  max_g_spread_bp: 2000
+  min_price: 70
+  min_rating: A-               # ступень A и выше; без рейтинга не отсекаем (книга неполная), фильтровать руками
+  require_rating: false
+  exclude_default_days: 365
+  min_fin_score: 0
+  require_financials: false
+  news_days: 90
+  news_stop_score: -8
+  exclude_moex_defaults: true
+
+risk:
+  max_weight_per_bond: 0.20       # 5–8 имён → до 20% на бумагу
+  max_weight_per_bond_ofz: 0.30
+  max_weight_per_issuer: 0.20
+  max_corporate_share: 1.00       # подушка ликвидности держится отдельно, не в этом профиле
+  min_portfolio_duration: 0.5
+  max_portfolio_duration: 4.0
+  max_g_spread_bp: 2000
+  min_list_level: 3
+  max_turnover_share: 0.05
+  yield_vol_bp_daily: 25
+  max_unrated_share: 1.00         # см. шапку: в бэктесте рейтингов нет
+  min_rating: ""
+  max_sector_share: 0.50          # два дорожника (АБЗ-1, Автобан) в одной корзине
+  fin_hard_stops: true
+
+strategy:
+  name: gspread
+  params:
+    top_n: 8
+    per_issuer: 1
+    rank: peers
+    min_excess_bp: 50
+    max_duration: 4.0
+    ofz_min_share: 0.0
+  rebalance: monthly
+
+backtest:
+  commission_bp: 5
+  slippage_bp: 15
+  initial_cash: 12000000
+  benchmark: RUCBITR
+  cash_spread_bp: -50
+
+execution:
+  broker: paper
+  state_path: state/portfolio_a_grade.json
+  journal_path: state/orders_a_grade.jsonl
