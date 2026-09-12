@@ -137,3 +137,27 @@ def test_performance_metrics_basic():
     assert performance(nav2).max_drawdown < -5
     with pytest.raises(ValueError):
         performance(nav.iloc[:1])
+
+
+def test_held_bond_without_trades_on_rebalance_day_is_kept(world):
+    """Позиция, по которой в день ребалансировки не было сделок, не продаётся «за выпадение из скрина»
+    и не докупается по устаревшей цене: движок ждёт дня со сделками."""
+    bonds, provider = world
+    # у корпората нет сделок в первые торговые дни марта (ребалансировка monthly попадает на 2024-03-01)
+    gap = pd.date_range("2024-03-01", "2024-03-06", freq="B")
+    provider.histories["CORP_A"] = provider.histories["CORP_A"].drop(gap, errors="ignore")
+    st = make_strategy("ladder", {"edges": [1, 3], "per_bucket": 2})
+    eng = BacktestEngine(st, bonds, provider, START, END, rebalance="monthly",
+                         screener_cfg=ScreenerConfig(min_turnover=0, max_bid_ask_pct=100, max_duration=20),
+                         risk_limits=RiskLimits(max_weight_per_bond=1.0, max_portfolio_duration=20))
+    res = eng.run()
+    bought = [t for t in res.trades if t.secid == "CORP_A" and t.side == "BUY"]
+    assert bought and bought[0].date < date(2024, 3, 1), "корпорат должен быть куплен до пропуска в истории"
+    in_gap = [t for t in res.trades if t.secid == "CORP_A" and date(2024, 3, 1) <= t.date <= date(2024, 3, 6)]
+    assert not in_gap, f"в дни без сделок по бумаге не должно быть ни продаж, ни покупок: {in_gap}"
+    # позиция пережила пропуск: вес есть на первой ребалансировке после него
+    w_after = next(w for d, w in sorted(res.weights_history.items()) if d >= date(2024, 4, 1))
+    assert "CORP_A" in w_after
+    # NAV в дни пропуска не проваливается (оценка по последней цене)
+    nav_gap = res.nav.loc["2024-02-28":"2024-03-07"]
+    assert nav_gap.pct_change().abs().max() < 0.02

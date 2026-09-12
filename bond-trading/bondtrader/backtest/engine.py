@@ -165,18 +165,26 @@ class BacktestEngine:
             # 2) котировки на сегодня
             universe: list[tuple[Bond, Quote]] = []
             marks: dict[str, tuple[float, float, float]] = {}
+            stale: set[str] = set()   # позиции без сделок сегодня: держим по последней цене, не докупаем и не продаём «за выпадение»
             for secid, df in hist.items():
                 bond = self.bonds[secid]
                 if bond.maturity and bond.maturity <= today:
                     continue
                 if ts not in df.index:
-                    # бумага не торговалась — последняя известная цена для оценки
+                    # бумага не торговалась — последняя известная цена для оценки; удерживаемая позиция остаётся во вселенной,
+                    # иначе стратегия её «не видит» и движок продаёт как выпавшую из скрина (ложная ребалансировка на тонких днях)
                     sub = df.loc[:ts]
                     if sub.empty or secid not in pf.positions:
                         continue
                     row = sub.iloc[-1]
                     face = float(row["face"]) if pd.notna(row.get("face")) else bond.face_value
-                    marks[secid] = (float(row["close"]), float(row["accrued"] or 0.0), face)
+                    accrued = float(row["accrued"]) if pd.notna(row.get("accrued")) else 0.0
+                    marks[secid] = (float(row["close"]), accrued, face)
+                    universe.append((bond, Quote(secid, today, price=float(row["close"]), accrued=accrued,
+                                                 ytm_moex=float(row["ytm"]) if pd.notna(row.get("ytm")) else None,
+                                                 duration_moex=float(row["duration"]) if pd.notna(row.get("duration")) else None,
+                                                 turnover=0.0)))
+                    stale.add(secid)
                     continue
                 row = df.loc[ts]
                 face = float(row["face"]) if pd.notna(row.get("face")) else bond.face_value
@@ -223,6 +231,8 @@ class BacktestEngine:
                         sell_rows[secid] = self._synthetic_row(self.bonds[secid], marks[secid], today)
                 orders = orders_from_targets(pf, targets, sell_rows, strategy=self.strategy.name, reasons=self.strategy.explain(ctx))
                 for o in orders:
+                    if o.secid in stale:
+                        continue   # цена устарела: ни докупать, ни продавать по ней — ждём дня со сделками
                     self._execute(pf, o, sell_rows[o.secid], today, trades)
                 weights_hist[today] = pf.weights(marks)
             prev_ts = ts
@@ -234,6 +244,7 @@ class BacktestEngine:
             try:
                 bench = self.provider.index_history(self.benchmark_name, self.start, self.end)
                 if bench is not None and bench.empty:
+                    log.warning("бенчмарк %s: история за %s — %s пуста", self.benchmark_name, self.start, self.end)
                     bench = None
             except Exception as e:  # noqa: BLE001
                 log.warning("бенчмарк %s недоступен: %s", self.benchmark_name, e)
