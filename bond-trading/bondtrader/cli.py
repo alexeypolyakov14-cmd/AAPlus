@@ -1311,6 +1311,51 @@ def cmd_issuer(args, settings):
     _print_df(df.head(args.top), csv=args.csv)
 
 
+def cmd_scenario(args, settings):
+    """Сценарии по корзине: полная доходность за горизонт и мгновенная переоценка при параллельном сдвиге доходностей."""
+    from .analytics.bond_math import compute_metrics
+    from .analytics.scenario import scenario_bond, scenario_portfolio
+    snap = load_snapshot(settings, args.fixtures)
+    _header(snap)
+    qs = [x.strip().upper() for x in args.universe.replace("|", ",").split(",") if x.strip()]
+    pairs = []
+    for q in qs:
+        hit = next(((b, qt) for b, qt in snap.universe if b.secid.upper() == q or (b.isin or "").upper() == q), None)
+        if hit is None:
+            hit = next(((b, qt) for b, qt in snap.universe if q in f"{b.name} {b.full_name}".upper()), None)
+        if hit is None:
+            print(f"{q}: не найдена на площадках, пропущена", file=sys.stderr)
+            continue
+        pairs.append(hit)
+    if not pairs:
+        raise SystemExit("пустая корзина")
+    shifts = [float(x) for x in args.shifts.split(",") if x.strip()]
+    rows = []
+    for bond, q in pairs:
+        if snap.enrich:
+            bond = snap.enrich(bond)
+        m = compute_metrics(bond, q, snap.settle, snap.curve)
+        r = scenario_bond(bond, q, snap.settle, shifts, args.horizon, metrics=m)
+        if r is None:
+            print(f"{bond.secid}: нет цены или графика, пропущена", file=sys.stderr)
+            continue
+        rows.append(r)
+    if not rows:
+        raise SystemExit("ни по одной бумаге не удалось посчитать сценарии")
+    print(f"Горизонт {args.horizon:g} г. (до {rows[0].horizon_end}); сдвиг доходности бумаги, б.п.: {', '.join(f'{s:+.0f}' for s in shifts)}; "
+          f"спред к ОФЗ и форма кривой неизменны, купоны реинвестируются под сдвинутую доходность\n")
+    cols = ["secid", "name", "ytw", "dur", "гасится"] + [f"TR {s:+.0f}" for s in shifts] + [f"шок {s:+.0f}" for s in shifts]
+    data = []
+    for r in rows:
+        data.append([r.secid, r.name, round(r.ytw, 2), round(r.duration, 2), "да" if r.matures_in_horizon else ""]
+                    + [round(r.total_return[s], 2) for s in shifts] + [round(r.instant_pnl[s], 2) for s in shifts])
+    _print_df(pd.DataFrame(data, columns=cols), csv=args.csv)
+    total, instant, ytw, dur = scenario_portfolio(rows)
+    print(f"\nКорзина (равные веса, {len(rows)} бумаг): YTW {ytw:.2f}%, дюрация {dur:.2f}")
+    print("Полная доходность за горизонт, %: " + "; ".join(f"{s:+.0f} б.п. → {total[s]:+.2f}" for s in shifts))
+    print("Мгновенная переоценка, %:        " + "; ".join(f"{s:+.0f} б.п. → {instant[s]:+.2f}" for s in shifts))
+
+
 def cmd_fundamentals(args, settings):
     """Фундамент по эмитенту из доступного в CI: карта долга MOEX, пресс-релиз агентства, проба ГИР БО, новости."""
     from .data.fundamentals import debt_map, fetch_releases
@@ -1476,6 +1521,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--regime", choices=["расширение", "сжатие", "стабильно", "первичка", "оферта"], help="только бумаги в этом режиме")
     sp.add_argument("--points", type=int, default=20, help="сколько точек ряда печатать для одной бумаги"); sp.add_argument("--csv")
     sp.set_defaults(fn=cmd_history)
+    sp = sub.add_parser("scenario", parents=[common], help="сценарии по корзине: полная доходность за горизонт и мгновенная переоценка при сдвиге доходностей")
+    sp.add_argument("--universe", required=True, help="бумаги через запятую: SECID/ISIN или часть названия")
+    sp.add_argument("--horizon", type=float, default=1.0, help="горизонт, лет (по умолчанию 1)")
+    sp.add_argument("--shifts", default="-300,-150,0,150,300,500", help="сдвиги доходности, б.п., через запятую")
+    sp.add_argument("--csv"); sp.set_defaults(fn=cmd_scenario)
     sp = sub.add_parser("fundamentals", parents=[common], help="фундамент по эмитенту: карта долга MOEX, пресс-релиз агентства с метриками, проба ГИР БО, новости"); screen_opts(sp)
     sp.add_argument("query", help="эмитент/бумага (часть названия/SECID/ISIN)"); sp.add_argument("--releases", type=int, default=2, help="сколько последних релизов читать")
     sp.add_argument("--days", type=int, default=120, help="окно новостей"); sp.add_argument("--no-web", action="store_true", help="без обращений к сайтам агентств/ГИР БО")
