@@ -10,6 +10,7 @@ data:
   issuers_csv: data/issuers.csv
   disclosure_csv: data/disclosure.csv    # e-disclosure: bondtrader -c configs/hy.yaml disclosure fetch --from-screen (из РФ)
   news_csv: data/news.csv                # новости: bondtrader -c configs/hy.yaml news fetch --from-screen (откуда угодно)
+  metrics_csv: data/metrics.csv             # метрики из релизов агентств: bondtrader metrics fetch --from-screen (отдельный кэш Actions)
   history_days: 90                       # окно истории G-спредов (MOEX history + кривые ОФЗ по датам); 0 — не грузить
   zcyc_history_json: data/zcyc_history.json   # книга кривых ОФЗ по датам (в CI едет в кэш вместе с остальными книгами)
 

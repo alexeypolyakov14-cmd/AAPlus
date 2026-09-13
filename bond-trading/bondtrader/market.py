@@ -16,6 +16,7 @@ from .data.moex import MoexClient, parse_board_securities
 from .data.disclosure import EventsBook
 from .data.history import SpreadHistoryService, ZcycStore
 from .data.financials import FinancialsBook, IssuerMap
+from .data.metrics import MetricsBook
 from .data.news import NewsBook
 from .data.ratings import RatingsBook
 from .models import Bond, Quote
@@ -41,6 +42,7 @@ class MarketSnapshot:
     describe: Optional[Callable[[Bond], dict]] = None   # описание бумаги MOEX ISS (флаги дефолта)
     rejected: dict[str, str] = field(default_factory=dict)  # secid -> причина отсева последним скрином
     history: Optional["SpreadHistoryService"] = None    # история G-спредов (MOEX history + кривые по датам); None офлайн
+    agency_metrics: Optional[MetricsBook] = None        # книга метрик из релизов агентств (data/metrics.csv)
 
     def screen_kwargs(self) -> dict:
         return {"enrich": self.enrich, "ratings": self.ratings, "financials": self.financials,
@@ -66,12 +68,19 @@ def load_books(settings: Settings) -> tuple[Optional[FinancialsBook], Optional[I
     return (fin if len(fin) else None), (iss if len(iss) else None), (ev if len(ev) else None), (nw if len(nw) else None)
 
 
+def load_metrics(settings: Settings) -> Optional[MetricsBook]:
+    book = MetricsBook.from_csv(settings.get("data", "metrics_csv", default=""))
+    return book if len(book) else None
+
+
 def load_snapshot(settings: Settings, fixtures_dir: Optional[str] = None, client: Optional[MoexClient] = None) -> MarketSnapshot:
     ratings = load_ratings(settings)
     financials, issuers, events, news = load_books(settings)
+    metrics_book = load_metrics(settings)
     if fixtures_dir:
         snap = _load_fixtures(fixtures_dir)
         snap.ratings, snap.financials, snap.issuers, snap.events, snap.news = ratings, financials, issuers, events, news
+        snap.agency_metrics = metrics_book
         return snap
     cache = SqliteCache(settings.get("data", "cache_path", default="data/cache/http_cache.sqlite"))
     client = client or MoexClient(cache=cache)
@@ -106,7 +115,7 @@ def load_snapshot(settings: Settings, fixtures_dir: Optional[str] = None, client
         history = SpreadHistoryService(client, today, days=days, store=store, today_curve=curve)
     return MarketSnapshot(today, universe, curve, kr, kr_hist, enrich=client.enrich, source="moex", ratings=ratings,
                           financials=financials, issuers=issuers, events=events, news=news,
-                          describe=lambda b: client.security_description(b.secid), history=history)
+                          describe=lambda b: client.security_description(b.secid), history=history, agency_metrics=metrics_book)
 
 
 def _load_fixtures(d: str) -> MarketSnapshot:

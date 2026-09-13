@@ -22,6 +22,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "issuers_csv": "data/issuers.csv",           # карта эмитент -> ИНН/сектор
         "disclosure_csv": "data/disclosure.csv",     # существенные факты e-disclosure
         "news_csv": "data/news.csv",                 # новостной фон по эмитентам
+        "metrics_csv": "data/metrics.csv",           # метрики из релизов агентств (долг/EBITDA, покрытие) и подразумеваемая ступень
     },
     "screener": {
         "currency": "SUR",

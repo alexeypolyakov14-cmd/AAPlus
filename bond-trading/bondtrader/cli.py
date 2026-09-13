@@ -15,6 +15,7 @@ from .config import Settings
 from .market import MarketSnapshot, load_snapshot
 from .portfolio import Portfolio
 from .risk import RiskLimits, RiskManager, orders_from_targets
+from .models import Bond
 from .screener import Screener, ScreenerConfig, ScreenRow, to_dataframe
 from .strategies import STRATEGIES, MarketContext, make_strategy
 
@@ -96,8 +97,9 @@ def _header(snap: MarketSnapshot) -> None:
     fin = f"{snap.financials.issuers} эмитентов" if snap.financials else "нет"
     ev = f"{len(snap.events)} событий" if snap.events else "нет"
     nw = f"{len(snap.news)} новостей" if snap.news else "нет"
+    mt = f"{len(snap.agency_metrics)} эмитентов" if snap.agency_metrics else "нет"
     print(f"Дата: {snap.settle}  Источник: {snap.source}  Бумаг: {len(snap.universe)}  Ключевая ставка: {kr}  Кривая: {cv}  "
-          f"Рейтинги: {rt}  Отчётность: {fin}  e-disclosure: {ev}  Новости: {nw}\n")
+          f"Рейтинги: {rt}  Отчётность: {fin}  e-disclosure: {ev}  Новости: {nw}  Метрики релизов: {mt}\n")
 
 
 def _analytics(snap: MarketSnapshot, rows: list[ScreenRow], only: Optional[set] = None) -> tuple[dict, dict]:
@@ -125,12 +127,13 @@ def _analytics(snap: MarketSnapshot, rows: list[ScreenRow], only: Optional[set] 
 
 def _make_ctx(snap: MarketSnapshot, rows: list[ScreenRow], pf: Portfolio) -> MarketContext:
     """MarketContext с аналитикой: история спреда, кривая эмитента и ряды спредов для стратегий."""
+    from .analytics.quality import quality_stats
     hist, iss = _analytics(snap, rows)
     series: dict[str, list[float]] = {}
     if snap.history is not None:
         by_id = {r.secid: r for r in rows}
         series = {s: [v for _, v in snap.history.series(by_id[s].bond)] for s in hist}
-    return MarketContext(snap.settle, rows, snap.curve, snap.keyrate, pf, series, hist, iss)
+    return MarketContext(snap.settle, rows, snap.curve, snap.keyrate, pf, series, hist, iss, quality_stats(rows, snap.agency_metrics))
 
 
 def _rating_lag(snap: MarketSnapshot, bond, hs) -> str:
@@ -1156,14 +1159,18 @@ def cmd_peers(args, settings):
                     for x in sorted(ps.peers, key=lambda x: -x.metrics.g_spread)]
             print(pd.DataFrame(recs).to_string(index=False))
         return
+    from .analytics.quality import quality_stats
     table = peer_table(corp, **kw)
     hist, iss = _analytics(snap, rows)
+    qual = quality_stats(corp, snap.agency_metrics)
     by_id = {r.secid: r for r in corp}
     recs = []
     for s, ps in table.items():
         r = by_id[s]
         hs, ist = hist.get(s), iss.get(s)
-        recs.append({"secid": s, "name": r.bond.name, "rating": r.rating_str, "sector": r.sector, "dur": round(r.metrics.macaulay_duration, 1),
+        q = qual.get(s)
+        recs.append({"secid": s, "name": r.bond.name, "rating": r.rating_str, "implied": q.implied if q else None,
+                     "gap": q.gap if q else None, "sector": r.sector, "dur": round(r.metrics.macaulay_duration, 1),
                      "ytw": round(r.metrics.yield_worst, 1), "spread": round(r.metrics.g_spread), "peers_med": round(ps.median), "excess": round(ps.excess),
                      "pct_rank": round(ps.pct_rank, 2), "n": ps.n, "group": ps.group,
                      "chg30": None if hs is None or hs.chg30 is None else round(hs.chg30), "z": None if hs is None else round(hs.z, 1),
@@ -1172,9 +1179,11 @@ def cmd_peers(args, settings):
     df = pd.DataFrame(recs).sort_values("excess", ascending=False)
     if args.min_excess:
         df = df[df["excess"] >= args.min_excess]
+    if getattr(args, "min_gap", None) is not None:
+        df = df[df["gap"].notna() & (df["gap"] >= args.min_gap)]
     print(f"\nЗа что платят больше, чем за пиров (рейтинг{' + сектор' if args.sector else ''}{f', дюрация ±{args.dur_window:g}' if args.dur_window > 0 else ''}; "
           f"мин. пиров {args.min_peers}; без рейтинга — сначала свой сектор); excess — к медиане пиров, pct_rank — доля пиров дешевле, "
-          f"chg30/z/hist — спред против своей истории, vs_issuer — к кривой эмитента:")
+          f"chg30/z/hist — спред против своей истории, vs_issuer — к кривой эмитента, implied/gap — ступень по метрикам релиза и разрыв с рейтингом:")
     _print_df(df.head(args.top), csv=args.csv)
 
 
@@ -1356,6 +1365,80 @@ def cmd_scenario(args, settings):
     print("Мгновенная переоценка, %:        " + "; ".join(f"{s:+.0f} б.п. → {instant[s]:+.2f}" for s in shifts))
 
 
+def cmd_metrics(args, settings):
+    """Книга метрик из релизов агентств: fetch (по скрину или списку) | list | show."""
+    from .data.fundamentals import fetch_releases
+    from .data.metrics import MetricsBook, implied_grade, metrics_from_digests, rating_gap
+    from .data.ratings_web import fetch as web_fetch
+    path = settings.get("data", "metrics_csv", default="data/metrics.csv")
+    book = MetricsBook.from_csv(path)
+    if args.action in ("list", "show"):
+        items = book.items
+        qs = [q.upper() for q in (args.query or [])]
+        if qs:
+            items = [m for m in items if any(q in m.key.upper() or q in m.subject.upper() for q in qs)]
+        print(f"Книга метрик: {len(book)} записей, показано {len(items)}")
+        recs = []
+        for m in sorted(items, key=lambda x: (x.key, x.agency)):
+            imp = implied_grade(m)
+            recs.append({"key": m.key[:24], "agency": m.agency, "date": m.release_date, "period": m.period, "rating": m.rating,
+                         "implied": imp, "gap": rating_gap(m.rating, imp), "nd_ebitda": m.net_debt_ebitda, "prev": m.net_debt_ebitda_prev,
+                         "d_ebitda": m.debt_ebitda, "cov": m.coverage, "margin": m.ebitda_margin, "rev_bln": m.revenue_bln, "sector": m.sector})
+        if recs:
+            df = pd.DataFrame(recs)
+            if getattr(args, "min_gap", None) is not None:
+                df = df[df["gap"].notna() & (df["gap"] >= args.min_gap)]
+            _print_df(df, csv=args.csv)
+        if args.action == "show":
+            for m in items:
+                print(f"\n{m.key}: {m.describe()}\n  {m.url}")
+        return
+    snap = load_snapshot(settings, args.fixtures)
+    if snap.ratings is None:
+        raise SystemExit("книга рейтингов пуста: ссылки на релизы берутся из реестра Эксперт РА (ratings fetch --sources raexpert)")
+    if args.from_screen:
+        rows = _screen(snap, settings, args)
+        bonds = [r.bond for r in rows if not r.bond.is_ofz]
+        sectors = {r.bond.issuer_key: r.sector for r in rows}
+    else:
+        if not args.query:
+            raise SystemExit("укажите --from-screen или --query <эмитенты>")
+        from .data.sectors import sector_of
+        qs = [q.upper() for q in args.query]
+        bonds = [b for b, _ in snap.universe if any(q in f"{b.name} {b.full_name}".upper() or b.secid.upper() == q or (b.isin or "").upper() == q for q in qs)]
+        sectors = {b.issuer_key: sector_of(b.name, b.full_name) for b in bonds}
+    keys: dict[str, Bond] = {}
+    for b in bonds:
+        keys.setdefault(b.issuer_key, b)
+    done = skipped = failed = kept = 0
+    for i, (key, bond) in enumerate(sorted(keys.items()), 1):
+        have = book.lookup(key)
+        if not args.refresh and have is not None and have.has_metrics:
+            kept += 1
+            continue
+        cands = snap.ratings.candidates(bond)
+        with_url = [c for c in cands if c.url]
+        if not with_url:
+            skipped += 1
+            continue
+        c = next((x for x in with_url if x.agency == "Эксперт РА"), with_url[0])
+        digests, diag = fetch_releases(c.url, web_fetch, limit=args.releases)
+        m = metrics_from_digests(key, c.agency, sectors.get(key, ""), digests)
+        if m is None:
+            failed += 1
+            print(f"[{i}/{len(keys)}] {key}: релизы не прочитаны ({diag})", file=sys.stderr)
+            continue
+        if not m.rating and c.rating:
+            m.rating = c.rating
+        book.upsert(m)
+        done += 1
+        print(f"[{i}/{len(keys)}] {key}: {m.describe()} → {implied_grade(m) or '—'}", file=sys.stderr)
+        if done % 10 == 0:
+            book.to_csv(path)
+    book.to_csv(path)
+    print(f"Книга метрик: {len(book)} записей ({path}); обновлено {done}, уже были {kept}, без ссылки на релизы {skipped}, не прочитано {failed}")
+
+
 def cmd_fundamentals(args, settings):
     """Фундамент по эмитенту из доступного в CI: карта долга MOEX, пресс-релиз агентства, проба ГИР БО, новости."""
     from .data.fundamentals import debt_map, fetch_releases
@@ -1513,6 +1596,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--top", type=int, default=30); sp.add_argument("--min-excess", type=float, default=0.0, help="б.п.; показывать только превышение не меньше")
     sp.add_argument("--min-peers", type=int, default=5); sp.add_argument("--sector", action="store_true", help="пиры только из того же сектора")
     sp.add_argument("--dur-window", type=float, default=1.0, help="окно дюрации ± лет (0 — не ограничивать)"); sp.add_argument("--csv")
+    sp.add_argument("--min-gap", type=int, help="только бумаги с метриками релиза и разрывом «рейтинг − ступень по метрикам» не ниже (0 — метрики не хуже рейтинга)")
     sp.set_defaults(fn=cmd_peers)
     sp = sub.add_parser("history", parents=[common], help="спред против собственной истории: расширение/сжатие за 30–60 дн., z, первичка, запаздывание рейтинга"); screen_opts(sp)
     sp.add_argument("query", nargs="?", help="бумага (часть названия/SECID/ISIN; несколько через запятую) — ряд по ней; без аргумента — таблица по срезу")
@@ -1526,6 +1610,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--horizon", type=float, default=1.0, help="горизонт, лет (по умолчанию 1)")
     sp.add_argument("--shifts", default="-300,-150,0,150,300,500", help="сдвиги доходности, б.п., через запятую")
     sp.add_argument("--csv"); sp.set_defaults(fn=cmd_scenario)
+    sp = sub.add_parser("metrics", parents=[common], help="метрики из релизов агентств (долг/EBITDA, покрытие) и ступень по ним: fetch | list | show"); screen_opts(sp)
+    sp.add_argument("action", choices=["fetch", "list", "show"])
+    sp.add_argument("--query", nargs="*", help="эмитенты (часть названия/SECID/ISIN)"); sp.add_argument("--from-screen", action="store_true", help="fetch: все эмитенты скрина")
+    sp.add_argument("--releases", type=int, default=3, help="fetch: сколько последних релизов просматривать в поисках чисел")
+    sp.add_argument("--refresh", action="store_true", help="fetch: перечитать и эмитентов, у которых числа уже есть")
+    sp.add_argument("--min-gap", type=int, help="list: только разрыв не ниже"); sp.add_argument("--csv"); sp.set_defaults(fn=cmd_metrics)
     sp = sub.add_parser("fundamentals", parents=[common], help="фундамент по эмитенту: карта долга MOEX, пресс-релиз агентства с метриками, проба ГИР БО, новости"); screen_opts(sp)
     sp.add_argument("query", help="эмитент/бумага (часть названия/SECID/ISIN)"); sp.add_argument("--releases", type=int, default=2, help="сколько последних релизов читать")
     sp.add_argument("--days", type=int, default=120, help="окно новостей"); sp.add_argument("--no-web", action="store_true", help="без обращений к сайтам агентств/ГИР БО")

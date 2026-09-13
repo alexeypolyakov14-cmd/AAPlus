@@ -38,6 +38,7 @@ class MarketContext:
     spread_history: dict[str, list[float]] = field(default_factory=dict)  # secid -> история G-спредов, б.п.
     history_stats: dict = field(default_factory=dict)   # secid -> analytics.history.SpreadStats (спред против своей истории)
     issuer_stats: dict = field(default_factory=dict)    # secid -> analytics.issuer_curve.IssuerCurveStats (кривая эмитента)
+    quality_stats: dict = field(default_factory=dict)   # secid -> analytics.quality.QualityStats (метрики против рейтинга)
 
     @property
     def by_id(self) -> dict[str, ScreenRow]:

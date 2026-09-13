@@ -10,6 +10,7 @@ data:
   issuers_csv: data/issuers.csv
   disclosure_csv: data/disclosure.csv
   news_csv: data/news.csv
+  metrics_csv: data/metrics.csv             # метрики из релизов агентств: bondtrader metrics fetch --from-screen (отдельный кэш Actions)
   history_days: 90
   zcyc_history_json: data/zcyc_history.json
 

@@ -9,6 +9,8 @@ rank = "history" — расширение спреда за 30 дней прот
                    не участвуют.
 rank = "issuer"  — превышение над кривой самого эмитента (ctx.issuer_stats): один выпуск шире соседей по эмитенту;
                    эмитенты с одним выпуском не участвуют.
+rank = "quality" — обе оси: превышение над пирами (как peers), но только у бумаг, чьи метрики из релиза агентства
+                   не хуже выданной ступени (ctx.quality_stats, gap ≥ min_gap). Без метрик — не участвуют.
 После сита ликвидности и стоп-факторов берём top_n, не больше per_issuer выпусков одного эмитента,
 потолок дюрации max_duration. Веса равные, плюс ликвидное ядро в ОФЗ ofz_min_share.
 Обоснование каждой бумаги всегда содержит все доступные ракурсы (пиры, история, кривая эмитента), какой бы
@@ -18,7 +20,7 @@ from __future__ import annotations
 
 from .base import MarketContext, Strategy
 
-RANKS = ("spread", "peers", "model", "history", "issuer")
+RANKS = ("spread", "peers", "model", "history", "issuer", "quality")
 
 
 class GSpreadStrategy(Strategy):
@@ -27,13 +29,14 @@ class GSpreadStrategy(Strategy):
 
     def __init__(self, top_n: int = 10, per_issuer: int = 1, max_duration: float = 3.0, min_spread_bp: float = 0.0,
                  ofz_min_share: float = 0.0, rank: str = "spread", min_excess_bp: float = 0.0, min_peers: int = 5,
-                 same_sector: bool = False, dur_window: float = 1.0):
+                 same_sector: bool = False, dur_window: float = 1.0, min_gap: int = 0):
         if rank not in RANKS:
             raise ValueError(f"rank={rank}: допустимо {', '.join(RANKS)}")
         self.top_n, self.per_issuer, self.max_duration = top_n, per_issuer, max_duration
         self.min_spread_bp, self.ofz_min_share = min_spread_bp, ofz_min_share
         self.rank, self.min_excess_bp, self.min_peers = rank, min_excess_bp, min_peers
         self.same_sector, self.dur_window = same_sector, (dur_window if dur_window and dur_window > 0 else None)
+        self.min_gap = int(min_gap)
         self._reasons: dict[str, str] = {}
         self.excess: dict[str, float] = {}     # секид -> превышение над ориентиром выбранной методики (б.п.)
         self.peers: dict = {}                  # секид -> PeerStats (считается всегда — для обоснования)
@@ -48,6 +51,9 @@ class GSpreadStrategy(Strategy):
             return {r.secid: (model.residual(features_of(r), r.metrics.g_spread) if model.ok else r.metrics.g_spread) for r in universe}
         if self.rank == "peers":
             return {s: ps.excess for s, ps in self.peers.items()}
+        if self.rank == "quality":
+            return {s: ps.excess for s, ps in self.peers.items()
+                    if s in ctx.quality_stats and ctx.quality_stats[s].gap is not None and ctx.quality_stats[s].gap >= self.min_gap}
         if self.rank == "history":
             return {r.secid: ctx.history_stats[r.secid].chg30 for r in universe
                     if r.secid in ctx.history_stats and ctx.history_stats[r.secid].chg30 is not None and ctx.history_stats[r.secid].reliable}
@@ -87,6 +93,8 @@ class GSpreadStrategy(Strategy):
         ist = ctx.issuer_stats.get(r.secid)
         if ist is not None:
             base += f"; эмитент: {ist.describe()}"
+        qs = ctx.quality_stats.get(r.secid)
+        base += f"; метрики: {qs.describe()}" if qs is not None else "; метрики: нет в книге"
         return base
 
     def targets(self, ctx: MarketContext) -> dict[str, float]:

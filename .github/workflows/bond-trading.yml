@@ -228,6 +228,12 @@ jobs:
           path: bond-trading/data/zcyc_history.json
           key: zcyc-${{ github.run_id }}
           restore-keys: zcyc-
+      - name: Книга метрик релизов агентств (кэш; отдельный ключ — список путей «Книги (кэш)» не трогаем)
+        uses: actions/cache@v4
+        with:
+          path: bond-trading/data/metrics.csv
+          key: metrics-${{ github.run_id }}
+          restore-keys: metrics-
       - name: Рейтинги (обновление, накопительно; АКРА — только свежие пресс-релизы)
         continue-on-error: true
         run: bondtrader ratings fetch --pages 8 2>&1 | tail -3
@@ -315,6 +321,12 @@ jobs:
           path: bond-trading/data/zcyc_history.json
           key: zcyc-none
           restore-keys: zcyc-
+      - name: Книга метрик релизов агентств (кэш)
+        uses: actions/cache/restore@v4
+        with:
+          path: bond-trading/data/metrics.csv
+          key: metrics-none
+          restore-keys: metrics-
       - name: Ответить на накопившиеся нажатия и команды
         run: |
           if [ -n "$TINVEST_TOKEN" ]; then BR="--broker tinvest"; else BR=""; fi
@@ -357,6 +369,12 @@ jobs:
           path: bond-trading/data/zcyc_history.json
           key: zcyc-${{ github.run_id }}
           restore-keys: zcyc-
+      - name: Книга метрик релизов агентств (кэш; отдельный ключ — список путей «Книги (кэш)» не трогаем)
+        uses: actions/cache@v4
+        with:
+          path: bond-trading/data/metrics.csv
+          key: metrics-${{ github.run_id }}
+          restore-keys: metrics-
       - name: Выпуски и статус в скрине
         if: env.LOOKUP != ''
         run: |
