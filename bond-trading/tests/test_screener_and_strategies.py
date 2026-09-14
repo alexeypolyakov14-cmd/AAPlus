@@ -186,3 +186,30 @@ def test_portfolio_accounting():
     assert pf.nav({}) == pytest.approx(pf.cash)
     d = pf.to_dict()
     assert Portfolio.from_dict(d).cash == pf.cash
+
+
+def test_carry_spread_adds_reversion_gain(rows, curve):
+    carry = make_strategy("carry", {"top_n": 4, "max_duration": 5, "ofz_min_share": 0.4})
+    cs = make_strategy("carry_spread", {"top_n": 4, "max_duration": 5, "ofz_min_share": 0.4, "reversion": 0.5})
+    ctx = MarketContext(SETTLE, rows, curve)
+    er0, er1 = carry.expected_returns(ctx), cs.expected_returns(ctx)
+    corp = [s for s in er1 if not ctx.by_id[s].bond.is_ofz]
+    assert corp and set(er1) <= set(er0)
+    # ОФЗ — без спредовой надбавки; у корпоратов E[R] сдвинут на D_mod · excess · reversion / 100
+    for s in er1:
+        r = ctx.by_id[s]
+        if r.bond.is_ofz:
+            assert er1[s] == pytest.approx(er0[s])
+        else:
+            ex = cs.excess_spreads(ctx)[s]
+            assert er1[s] - er0[s] == pytest.approx(r.metrics.modified_duration * ex * 0.5 / 100)
+    # reversion=0 — совпадает с чистым carry
+    cs0 = make_strategy("carry_spread", {"top_n": 4, "max_duration": 5, "ofz_min_share": 0.4, "reversion": 0.0})
+    assert cs0.expected_returns(ctx) == pytest.approx(er0)
+    w = cs.targets(ctx)
+    assert abs(sum(w.values()) - 1.0) < 1e-9 and len(w) == 4
+    assert all("E[R]" in r for r in cs.explain(ctx).values())
+    assert any("спред" in r for r in cs.explain(ctx).values())
+    # entry_z отсекает узкие спреды
+    tight = make_strategy("carry_spread", {"top_n": 4, "entry_z": 99})
+    assert all(ctx.by_id[s].bond.is_ofz for s in tight.expected_returns(ctx))

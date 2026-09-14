@@ -123,7 +123,9 @@ jobs:
         run: |
           bondtrader -c configs/a_grade.yaml screen --top 50 -v 2>&1 | grep -v DEBUG
           bondtrader -c configs/a_grade.yaml signals
-          bondtrader -c configs/a_grade.yaml signals -p per_unit_duration=true -p top_n=15
+          bondtrader -c configs/a_grade.yaml signals -s carry_spread -p top_n=16 -p max_duration=4 -p ofz_min_share=0.15 -p reversion=0.5
+          bondtrader -c configs/a_grade.yaml signals -s carry_spread -p top_n=16 -p max_duration=4 -p ofz_min_share=0.15 -p reversion=0.5 -p entry_z=0.5
+          bondtrader -c configs/a_grade.yaml signals -s spread -p top_n=16 -p entry_z=0.5 -p ofz_anchor=0.15 -p max_spread_bp=1000
       - name: Новости по эмитентам ВДО-скрина -> data/news.csv; покрытие отчётностью; целевой портфель value_hy
         continue-on-error: true
         run: |
