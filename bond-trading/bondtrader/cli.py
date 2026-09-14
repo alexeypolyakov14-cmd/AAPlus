@@ -1431,7 +1431,8 @@ def cmd_metrics(args, settings):
                 # произвольный источник (MOEX ISS, список ценных бумаг): показать начало и есть ли поле INN
                 flat = _re.sub(r"\s+", " ", page)[:600]
                 print(f"  начало: {flat}")
-                print(f"  вхождений 'INN': {len(_re.findall(r'\bINN\b', page))}, 'ИНН': {len(_re.findall('ИНН', page))}")
+                n_inn, n_rus = len(_re.findall(r"\bINN\b", page)), page.count("ИНН")
+                print(f"  вхождений 'INN': {n_inn}, 'ИНН': {n_rus}")
                 continue
             links = release_links(page, base=_site_base(url))
             if links:
