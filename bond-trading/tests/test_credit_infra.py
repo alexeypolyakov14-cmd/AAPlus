@@ -313,3 +313,16 @@ def test_news_stop_requires_issuer_as_subject():
                      NewsItem(date(2025, 5, 30), "Ромашка ООО", "google:РБК", "ООО Ромашка допустила дефолт по облигациям", "", "", -4.0, "default")])
     assert book.issuer_score(SETTLE, name="Сбербанк ПАО").stop is None
     assert book.issuer_score(SETTLE, name="Ромашка ООО БО-01").stop is not None
+
+
+def test_issuer_key_groups_issues_by_full_name():
+    # короткие имена склеены и различаются между выпусками — группировать надо по SECNAME
+    a = Bond("RU1", name="ПолиплП2Б9", full_name="Полипласт АО П02-БО-03")
+    b = Bond("RU2", name="ПолипП2Б17", full_name="Полипласт АО П02-БО-17")
+    assert a.issuer_key == b.issuer_key == "ПОЛИПЛАСТ"
+    assert Bond("RU3", name="Самолет1P12", full_name="ГК Самолет ПАО БО-П12").issuer_key == "САМОЛЕТ"
+    assert Bond("RU4", name="СТМ 1Р8", full_name="Синара - Транспортные Машины 001P-08").issuer_key == "СИНАРА"
+    # субфедеральные не должны сливаться с ОФЗ (для «МИНФИН» лимит на эмитента не применяется)
+    assert Bond("RU5", name="УльянОбл8", full_name="Минфин Ульяновской обл. 34008").issuer_key != "МИНФИН"
+    assert Bond("SU26238RMFS4", name="ОФЗ 26238", full_name="ОФЗ-ПД 26238").issuer_key == "МИНФИН"
+    assert Bond("RU6", name="Старое имя").issuer_key == "СТАРОЕ"   # без SECNAME — как раньше, по короткому имени

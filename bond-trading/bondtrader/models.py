@@ -26,6 +26,10 @@ STRUCTURED_RE = re.compile(r"(^|\s)(СФО|ИА|СБСекр|СБ Секьюр|�
                            r"\bкл\.? ?[АБA-C]\d?\b|класс[аы]? [АБ]\b|ИОС\d|\bИОС\b|инвестиционн\w+ облигац|структурн\w+ облигац", re.IGNORECASE)
 
 
+_LEGAL_FORMS = {"АО", "ПАО", "ООО", "ЗАО", "ОАО", "НАО", "МКПАО", "МКООО", "ГК", "ГРУППА", "КОМПАНИЯ", "ХОЛДИНГ",
+                "ЛК", "ФК", "ИК", "УК", "МФК", "МКК", "КБ", "БАНК"}   # организационно-правовые формы и общие слова в SECNAME
+
+
 @dataclass
 class Bond:
     """Статические параметры облигации (из MOEX ISS securities + bondization)."""
@@ -95,10 +99,24 @@ class Bond:
 
     @property
     def issuer_key(self) -> str:
-        """Грубый ключ эмитента для лимитов концентрации (первое слово названия; ОФЗ — Минфин)."""
+        """Грубый ключ эмитента для лимитов концентрации: первое значимое слово полного названия MOEX
+        (SECNAME, без организационно-правовой формы: АО/ПАО/ООО/ГК…); ОФЗ — МИНФИН.
+
+        Короткое имя (SHORTNAME) часто склеено без пробелов и различается между выпусками одного
+        эмитента («ПолиплП2Б9» / «ПолипП2Б17»), поэтому по нему выпуски не группируются.
+        """
         if self.is_ofz:
             return "МИНФИН"
-        return (self.name or self.secid).split()[0].upper().rstrip(",.-")
+        for source in (self.full_name, self.name, self.secid):
+            words = [w.strip("«»\"'(),.").upper() for w in (source or "").split()]
+            words = [w for w in words if w and w not in _LEGAL_FORMS and w != "-"]
+            if not words:
+                continue
+            key = words[0]
+            if key == "МИНФИН" and len(words) > 1:      # субфедеральные «Минфин Ульяновской обл.» ≠ ОФЗ
+                key = f"{key} {words[1]}"
+            return key.rstrip(",.-")
+        return self.secid.upper()
 
 
 @dataclass
