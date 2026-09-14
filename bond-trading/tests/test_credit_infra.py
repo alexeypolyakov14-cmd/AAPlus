@@ -339,3 +339,9 @@ def test_fundamentals_debt_map_and_release_digest():
     <tr><td><a href="/database/companies/aerofuels/">АО «Аэрофьюэлз»</a></td><td>ruA</td><td>10.09.2026</td></tr></tbody></table>"""
     rs = parse_table_with_header(tbl, "Эксперт РА", "issuer")
     assert rs[0].url == "https://raexpert.ru/database/companies/aerofuels/" and rs[0].rating == "A"
+
+
+def test_girbo_search_strips_highlight_tags():
+    from bondtrader.data.girbo import _clean_org
+    org = _clean_org({"inn": "78<strong>0401</strong>6807", "shortName": "АО <strong>АБЗ-1</strong>", "id": 5})
+    assert org == {"inn": "7804016807", "shortName": "АО АБЗ-1", "id": 5}

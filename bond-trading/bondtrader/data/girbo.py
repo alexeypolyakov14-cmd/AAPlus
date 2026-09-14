@@ -39,6 +39,17 @@ _LINE_RE = re.compile(r"^(current|previous|beforePrevious)(\d{4})$")
 OKEI_TO_THOUSANDS = {"384": 1.0, "385": 1000.0, "383": 0.001}
 
 
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _clean_org(it: dict) -> dict:
+    """Поиск подсвечивает совпадения тегами <strong>…</strong> прямо в полях (в т.ч. в ИНН) — вычищаем."""
+    out = {}
+    for k, v in it.items():
+        out[k] = _TAG_RE.sub("", v).strip() if isinstance(v, str) else v
+    return out
+
+
 class GirboUnavailable(RuntimeError):
     """ГИР БО отдал не JSON (геоблок / заглушка SPA / антибот)."""
 
@@ -74,7 +85,7 @@ class GirboClient:
                 continue
             items = data.get("content") if isinstance(data, dict) else data
             if isinstance(items, list):
-                return items
+                return [_clean_org(it) for it in items if isinstance(it, dict)]
         if last:
             raise last
         return []
@@ -204,7 +215,7 @@ def fetch_issuer(client: GirboClient, query: str, cache_dir: str = "data/financi
     org = client.find_org(query)
     if not org:
         return None, []
-    inn = str(org.get("inn") or "")
+    inn = re.sub(r"\D", "", str(org.get("inn") or ""))
     this_year = date.today().year
     sts = client.statements(org, years=range(this_year - years - 1, this_year + 1))
     if inn:
