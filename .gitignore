@@ -4,3 +4,4 @@ aaplus.db-wal
 aaplus.db-shm
 .env
 *.log
+bond-trading/data/financials/

@@ -6,8 +6,10 @@
 data:
   boards: [TQOB, TQCB]
   ratings_csv: data/ratings.csv
-  financials_csv: data/financials.csv    # ГИР БО: bondtrader -c configs/hy.yaml financials fetch --from-screen (из РФ)
-  issuers_csv: data/issuers.csv
+  financials_csv: data/books/financials.csv   # ГИР БО, коммитится в репозиторий: bondtrader -c configs/hy.yaml financials fetch --from-screen (из РФ);
+                                              # вне кэша Actions «Книги», иначе кэш затирал бы свежий файл из репозитория
+  financials_cache: data/financials            # сырые ответы ГИР БО, в git не идут
+  issuers_csv: data/books/issuers.csv         # карта ИНН/сектор/вторые имена, коммитится в репозиторий
   disclosure_csv: data/disclosure.csv    # e-disclosure: bondtrader -c configs/hy.yaml disclosure fetch --from-screen (из РФ)
   news_csv: data/news.csv                # новости: bondtrader -c configs/hy.yaml news fetch --from-screen (откуда угодно)
   metrics_csv: data/metrics.csv             # метрики из релизов агентств: bondtrader metrics fetch --from-screen (отдельный кэш Actions)

@@ -6,8 +6,9 @@
 data:
   boards: [TQOB, TQCB]
   ratings_csv: data/ratings.csv
-  financials_csv: data/financials.csv
-  issuers_csv: data/issuers.csv
+  financials_csv: data/books/financials.csv   # коммитится в репозиторий, вне кэша Actions
+  financials_cache: data/financials            # сырые ответы ГИР БО, в git не идут
+  issuers_csv: data/books/issuers.csv         # карта ИНН/сектор/вторые имена, коммитится в репозиторий
   disclosure_csv: data/disclosure.csv
   news_csv: data/news.csv
   metrics_csv: data/metrics.csv             # метрики из релизов агентств: bondtrader metrics fetch --from-screen (отдельный кэш Actions)
