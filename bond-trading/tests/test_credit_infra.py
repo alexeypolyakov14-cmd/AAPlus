@@ -345,3 +345,31 @@ def test_girbo_search_strips_highlight_tags():
     from bondtrader.data.girbo import _clean_org
     org = _clean_org({"inn": "78<strong>0401</strong>6807", "shortName": "АО <strong>АБЗ-1</strong>", "id": 5})
     assert org == {"inn": "7804016807", "shortName": "АО АБЗ-1", "id": 5}
+
+
+def test_girbo_find_org_validates_candidates():
+    from bondtrader.data.girbo import GirboClient, _opf_compatible
+
+    class Fake(GirboClient):
+        def __init__(self, items):
+            super().__init__()
+            self._items = items
+
+        def search(self, query):
+            return self._items
+
+    items = [{"inn": "0257013900", "shortName": 'ООО "КЭМП02"'}, {"inn": "7708186108", "shortName": 'АО "ПОЛИПЛАСТ"'}]
+    org = Fake(items).find_org("ПОЛИПЛАСТ", expect="Полипласт АО П02-БО-14")
+    assert org and org["inn"] == "7708186108"
+    # ООО с тем же именем — другое юрлицо, а профсоюз — не эмитент
+    items = [{"inn": "2309127380", "shortName": 'ООО "ГИДРОМАШСЕРВИС"'}, {"inn": "1650030847", "shortName": 'ФБСП ПАО "КАМАЗ"'}]
+    assert Fake(items).find_org("ГИДРОМАШСЕРВИС", expect="ГИДРОМАШСЕРВИС АО БО-03") is None
+    assert Fake(items).find_org("КАМАЗ", expect="КАМАЗ ПАО БО-П15") is None
+    items = [{"inn": "7733015025", "shortName": 'АО "ГИДРОМАШСЕРВИС"'}]
+    assert Fake(items).find_org("ГИДРОМАШСЕРВИС", expect="ГИДРОМАШСЕРВИС АО БО-03")["inn"] == "7733015025"
+    # серия в запросе не должна вести к чужой организации
+    assert Fake([{"inn": "6500002920", "shortName": 'ООО "СП15"'}]).find_org("ГК САМОЛЕТ", expect="ГК Самолет БО-П15") is None
+    assert _opf_compatible('ПАО "СЕЛИГДАР"', "Селигдар АО 001Р-04") and not _opf_compatible('ООО "СИНАРА"', "СТМ АО 1P4")
+    assert _opf_compatible('ООО "АЭРОФЬЮЭЛЗ ГРУПП"', "Аэрофьюэлз 002Р-06")
+    # ИНН — как раньше, точное совпадение
+    assert Fake([{"inn": "7804016807", "shortName": 'АО "АБЗ-1"'}]).find_org("7804016807")["inn"] == "7804016807"

@@ -50,6 +50,26 @@ def _clean_org(it: dict) -> dict:
     return out
 
 
+_OPF_RE = re.compile(r"(?<![А-ЯA-Z])(ПАО|НАО|ЗАО|ОАО|АО|ООО|МФК|МКК|ПК|БФ|МБУ|ППО|РОО|ТРОО|ФБСП)(?![А-ЯA-Z])")
+_CORP = {"ПАО", "НАО", "ЗАО", "ОАО", "АО"}
+
+
+def _opf_compatible(org_name: str, expected: str) -> bool:
+    """ООО ≠ АО/ПАО (разные юрлица с похожим именем); АО ~ ПАО ~ ЗАО. Если у одной из сторон формы нет — не спорим.
+    Профсоюзы, фонды, потребкооперативы и прочие некоммерческие формы за компанию-эмитента не принимаем."""
+    a = set(_OPF_RE.findall(org_name.upper()))
+    b = set(_OPF_RE.findall(expected.upper()))
+    if a & {"ПК", "БФ", "МБУ", "ППО", "РОО", "ТРОО", "ФБСП"}:
+        return False
+    if not a or not b:
+        return True
+    ca, cb = bool(a & _CORP), bool(b & _CORP)
+    la, lb = "ООО" in a, "ООО" in b
+    if (ca and lb and not la) or (la and cb and not ca):
+        return False
+    return True
+
+
 class GirboUnavailable(RuntimeError):
     """ГИР БО отдал не JSON (геоблок / заглушка SPA / антибот)."""
 
@@ -90,8 +110,11 @@ class GirboClient:
             raise last
         return []
 
-    def find_org(self, query: str) -> Optional[dict]:
-        """ИНН — точное совпадение; название — первый результат."""
+    def find_org(self, query: str, expect: Optional[str] = None) -> Optional[dict]:
+        """ИНН — точное совпадение. Название — НЕ первый результат: поиск ГИР БО по подстроке возвращает что угодно
+        («Полипласт АО П02-БО-14» → ООО «КЭМП02», «ГК Самолет БО-П15» → ООО «СП15»), поэтому кандидат обязан
+        совпасть с ожидаемым именем эмитента (expect, обычно полное имя выпуска MOEX) по словам (issuer_same)
+        и по форме собственности (ООО против АО/ПАО — разные организации). Среди подходящих — лучший по совпадению."""
         items = self.search(query)
         if not items:
             return None
@@ -100,7 +123,17 @@ class GirboClient:
                 if str(it.get("inn") or "") == query:
                     return it
             return None
-        return items[0]
+        from .ratings import issuer_same
+        target = expect or query
+        best, best_score = None, 0.0
+        for it in items:
+            name = str(it.get("shortName") or it.get("fullName") or "")
+            if not name or not _opf_compatible(name, target):
+                continue
+            score = issuer_same(name, target)
+            if score > best_score:
+                best, best_score = it, score
+        return best
 
     # ---- отчётность ----
     def bfo_list(self, org_id: Any) -> list[dict]:
@@ -205,14 +238,15 @@ def load_cache(cache_dir: str, inn: str) -> Optional[dict]:
 
 
 def fetch_issuer(client: GirboClient, query: str, cache_dir: str = "data/financials", years: int = 3,
-                 refresh: bool = False) -> tuple[Optional[dict], list[Statement]]:
-    """Отчётность по ИНН или названию: из кэша, иначе с ГИР БО (с записью в кэш)."""
+                 refresh: bool = False, expect: Optional[str] = None) -> tuple[Optional[dict], list[Statement]]:
+    """Отчётность по ИНН или названию: из кэша, иначе с ГИР БО (с записью в кэш).
+    expect — ожидаемое имя эмитента для проверки кандидата при поиске по названию (см. find_org)."""
     if query.isdigit() and not refresh:
         cached = load_cache(cache_dir, query)
         if cached:
             sts = [Statement(query, s["year"], {k: float(v) for k, v in s["values"].items()}, s.get("source", "girbo")) for s in cached["statements"]]
             return {"inn": query, "shortName": cached.get("name"), "id": cached.get("org_id")}, sts
-    org = client.find_org(query)
+    org = client.find_org(query, expect=expect)
     if not org:
         return None, []
     inn = re.sub(r"\D", "", str(org.get("inn") or ""))

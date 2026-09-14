@@ -851,18 +851,21 @@ def cmd_financials(args, settings):
             rows = _screen(snap, settings, args)
             seen: set[str] = set()
             for r in rows:
-                if r.bond.is_ofz:
+                if r.bond.is_ofz or r.sector in ("gov", "subfed"):   # у регионов и Минфина нет отчётности в ГИР БО
                     continue
                 key = r.inn or r.bond.issuer_key
                 if key in seen:
                     continue
                 seen.add(key)
-                queries.append((r.inn or r.bond.full_name or r.bond.name, r.bond))
+                # ищем по имени эмитента без серии (поиск ГИР БО по подстроке цепляется за серию: «П02-БО-14» → ООО «КЭМП02»),
+                # а проверяем кандидата по полному имени выпуска (find_org: слова + форма собственности)
+                queries.append((r.inn or r.bond.issuer_key, r.bond))
         client = GirboClient()
         ok, failed = 0, 0
         for q, bond in queries:
+            expect = (bond.full_name or bond.name) if bond is not None else None
             try:
-                org, sts = fetch_issuer(client, q, cache_dir=cache_dir, years=args.years, refresh=args.refresh)
+                org, sts = fetch_issuer(client, q, cache_dir=cache_dir, years=args.years, refresh=args.refresh, expect=expect)
             except GirboUnavailable as e:
                 print(f"ГИР БО недоступен: {e}\nЗапустите команду из РФ (или через российский прокси) — из-за рубежа сайт отдаёт заглушку.")
                 break
@@ -870,7 +873,7 @@ def cmd_financials(args, settings):
                 print(f"{q}: ошибка {e}"); failed += 1
                 continue
             if not org:
-                print(f"{q}: организация не найдена"); failed += 1
+                print(f"{q}: организация не найдена или ни один кандидат не совпал с «{expect or q}»"); failed += 1
                 continue
             for st in sts:
                 book.add(st)
