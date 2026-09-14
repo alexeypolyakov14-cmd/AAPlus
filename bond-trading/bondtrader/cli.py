@@ -1427,6 +1427,12 @@ def cmd_metrics(args, settings):
             inns = sorted({m.group(1) for m in _re.finditer(r"ИНН\D{0,20}(\d{10})\b", text)})
             ogrns = sorted({m.group(1) for m in _re.finditer(r"ОГРН\D{0,20}(\d{13})\b", text)})
             print(f"  ИНН на странице: {inns or 'не найден'}; ОГРН: {ogrns or 'не найден'}")
+            if "raexpert.ru" not in url and "ratings.ru" not in url:
+                # произвольный источник (MOEX ISS, список ценных бумаг): показать начало и есть ли поле INN
+                flat = _re.sub(r"\s+", " ", page)[:600]
+                print(f"  начало: {flat}")
+                print(f"  вхождений 'INN': {len(_re.findall(r'\bINN\b', page))}, 'ИНН': {len(_re.findall('ИНН', page))}")
+                continue
             links = release_links(page, base=_site_base(url))
             if links:
                 print(f"  ссылок на релизы: {len(links)}; первые: " + ", ".join(links[:args.releases]))
