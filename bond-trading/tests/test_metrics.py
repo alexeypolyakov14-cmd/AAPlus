@@ -142,3 +142,15 @@ def test_nkr_issuer_url_and_release_links():
     assert _site_base("https://ratings.ru/ratings/issuers/Polyplast/") == "https://ratings.ru"
     assert release_links(page, base="https://ratings.ru") == ["https://ratings.ru/ratings/press-releases/Polyplast-RA-101125/",
                                                               "https://ratings.ru/ratings/press-releases/Polyplast-RA-131124/"]
+
+
+def test_years_and_amounts_are_not_ratios():
+    """«Брусника: долг/EBITDA 2022x», «Сибур: 2027x» — год вместо коэффициента; такие числа отбрасываются, поиск идёт дальше."""
+    from bondtrader.data.sectors import sector_of
+    m = extract_metrics(["Отношение совокупного долга к OIBDA в 2022 году оставалось высоким, а по итогам 2023 года снизилось до 4,1.",
+                         "Долг/EBITDA компании к 2027 х ожидается ниже 2,0х."], "")
+    assert m["debt_ebitda"] == 4.1
+    assert "debt_ebitda" not in extract_metrics(["Совокупный долг к OIBDA компания планирует снизить к 2027 году."], "")
+    # лизинг и банки — финансовый сектор, ступень по бенчмаркам не считается
+    assert sector_of("ГТЛК 2P-03", "ГТЛК АО 002Р-03") == "leasing" and sector_of("Европлн1Р9", "Европлан ЛК ПАО 001P-09") == "leasing"
+    assert implied_grade(AgencyMetrics("k", "s", "a", "u", coverage=1.0, sector="leasing")) is None

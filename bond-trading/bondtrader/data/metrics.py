@@ -45,7 +45,7 @@ _RE_PERIOD_YEAR2 = re.compile(r"за\s+(\d{4})\s+год", re.I)
 # чтобы не зацепить год или прогноз; проценты и суммы в млрд/млн отсекаются.
 _VERB = r"(?:составил[а-я]*|выросл[а-я]*|увеличил[а-я]*|снизил[а-я]*|уменьшил[а-я]*|сократил[а-я]*|остал[а-я]+|находил[а-я]+|оценивал[а-я]+)"
 _LEAD = r"\s+(?:до\s+|на\s+уровне\s+|уровне\s+|на\s+отметке\s+|около\s+|в\s+|порядка\s+)?"
-_NOT_AMOUNT = r"(?![\d.,]*\s*(?:%|млрд|млн|п\.\s*п\.|раз))"
+_NOT_AMOUNT = r"(?![\d.,]*\s*(?:%|млрд|млн|тыс|п\.\s*п\.|раз|год|г\.))"
 _GAP = r"(?:[^.;]|\.(?=\d))*?"          # внутри предложения; точка допустима только в дате/числе («завершившихся 30.06.2025»)
 _AFTER = r"(?:" + _VERB + _LEAD + r"|\s*[—–-]\s*)"   # «составил 2,5» или «(OIBDA / процентные расходы) — 3,1»
 _RE_GROSS_LEV_NKR = re.compile(r"(?:долг[а-я]*\s*(?:к|/)\s*(?:EBITDA|OIBDA)\)?|долгов[а-я]+\s+нагрузк[а-я]+)" + _GAP + _AFTER + _NUM + _NOT_AMOUNT, re.I)
@@ -64,11 +64,24 @@ def _f(s: str) -> float:
     return float(s.replace(",", "."))
 
 
-def _first(rx: re.Pattern, sentences: Iterable[str]) -> Optional[float]:
+MAX_LEVERAGE, MAX_COVERAGE = 30.0, 100.0     # выше — не коэффициент, а год/сумма («… к 2027 г.», «выручка 2022 …»)
+
+
+def _lev_ok(v: float) -> bool:
+    return 0.0 <= v <= MAX_LEVERAGE
+
+
+def _cov_ok(v: float) -> bool:
+    return -MAX_COVERAGE <= v <= MAX_COVERAGE
+
+
+def _first(rx: re.Pattern, sentences: Iterable[str], ok=lambda v: True) -> Optional[float]:
+    """Первое правдоподобное число по шаблону; неправдоподобные (год, сумма) пропускаются, поиск продолжается."""
     for s in sentences:
-        m = rx.search(s)
-        if m:
-            return _f(m.group(1))
+        for m in rx.finditer(s):
+            v = _f(m.group(1))
+            if ok(v):
+                return v
     return None
 
 
@@ -125,42 +138,42 @@ class AgencyMetrics:
 def extract_metrics(sentences: list[str], title: str = "") -> dict:
     """Числа из предложений релиза. Возвращает словарь полей AgencyMetrics (без key/subject/agency/url)."""
     out: dict = {}
-    net = _first(_RE_NET_LEV, sentences)
+    net = _first(_RE_NET_LEV, sentences, _lev_ok)
     if net is None:
-        net = _first(_RE_NET_LEV2, sentences)
+        net = _first(_RE_NET_LEV2, sentences, _lev_ok)
     if net is not None:
         out["net_debt_ebitda"] = net
         for s in sentences:
             if _RE_NET_LEV.search(s) or _RE_NET_LEV2.search(s):
                 m = _RE_PREV.search(s)
-                if m:
+                if m and _lev_ok(_f(m.group(1))):
                     out["net_debt_ebitda_prev"] = _f(m.group(1))
                 break
-    gross = _first(_RE_GROSS_LEV, sentences)
+    gross = _first(_RE_GROSS_LEV, sentences, _lev_ok)
     if gross is None and net is None:
-        gross = _first(_RE_GROSS_LEV2, sentences)
+        gross = _first(_RE_GROSS_LEV2, sentences, _lev_ok)
     if gross is None and net is None:
         for s in sentences:
             ft = _RE_LEV_NKR_FROM_TO.search(s)
-            if ft:
+            if ft and _lev_ok(_f(ft.group(2))) and _lev_ok(_f(ft.group(1))):
                 gross, out["debt_ebitda_prev"] = _f(ft.group(2)), _f(ft.group(1))
                 break
-            m = _RE_GROSS_LEV_NKR.search(s)
+            m = next((m for m in _RE_GROSS_LEV_NKR.finditer(s) if _lev_ok(_f(m.group(1)))), None)
             if m:
                 gross = _f(m.group(1))
                 pv = _RE_PREV_NKR.match(s, m.end())
-                if pv:
+                if pv and _lev_ok(_f(pv.group(1))):
                     out["debt_ebitda_prev"] = _f(pv.group(1))
                 break
     if gross is not None:
         out["debt_ebitda"] = gross
-    cov = _first(_RE_COV_DOWN, sentences)
+    cov = _first(_RE_COV_DOWN, sentences, _cov_ok)
     if cov is None:
-        cov = _first(_RE_COV, sentences)
+        cov = _first(_RE_COV, sentences, _cov_ok)
     if cov is None:
-        cov = _first(_RE_COV_NKR, sentences)
+        cov = _first(_RE_COV_NKR, sentences, _cov_ok)
     if cov is None:
-        cov = _first(_RE_COV_NKR2, sentences)
+        cov = _first(_RE_COV_NKR2, sentences, _cov_ok)
     if cov is not None:
         out["coverage"] = cov
     m = _first(_RE_MARGIN, sentences)
