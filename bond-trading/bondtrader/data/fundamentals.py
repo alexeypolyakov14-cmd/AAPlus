@@ -193,11 +193,12 @@ def inn_from_page(page_html: str) -> tuple[Optional[str], Optional[str]]:
     return (inn.group(1) if inn else None), (ogrn.group(1) if ogrn else None)
 
 
-def inn_from_agency(candidates, fetch) -> tuple[Optional[str], str]:
-    """ИНН по карточкам агентств из записей рейтингов (Rating.url): (ИНН, адрес карточки, где нашли) или (None, диагностика)."""
+def inn_from_agency(candidates, fetch, extra_urls: Optional[list[str]] = None) -> tuple[Optional[str], str]:
+    """ИНН по карточкам агентств из записей рейтингов (Rating.url) и по дополнительным адресам (релиз из книги метрик —
+    Эксперт РА печатает ИНН в шапке релиза): (ИНН, адрес, где нашли) или (None, диагностика)."""
     seen: set[str] = set()
-    for c in candidates:
-        url = getattr(c, "url", "")
+    urls = [getattr(c, "url", "") for c in candidates] + list(extra_urls or [])
+    for url in urls:
         if not url or url in seen:
             continue
         seen.add(url)

@@ -867,8 +867,10 @@ def cmd_financials(args, settings):
                 seen.add(key)
                 inn = r.inn
                 if not inn and snap.ratings is not None and not getattr(args, "no_agency_inn", False):
-                    # ИНН с карточки агентства (Эксперт РА / НКР): у ВДО-эмитентов много тёзок, поиск по имени в ГИР БО путается
-                    inn, where = inn_from_agency(snap.ratings.candidates_wide(r.bond), web_fetch)
+                    # ИНН с карточки агентства (Эксперт РА / НКР) или из релиза (книга метрик): у ВДО-эмитентов много тёзок,
+                    # поиск по имени в ГИР БО путается
+                    am = snap.agency_metrics.lookup(r.bond.issuer_key) if snap.agency_metrics is not None else None
+                    inn, where = inn_from_agency(snap.ratings.candidates_wide(r.bond), web_fetch, extra_urls=[am.url] if am and am.url else [])
                     if inn:
                         found_inn += 1
                         print(f"{r.bond.issuer_key}: ИНН {inn} с карточки {where}", file=sys.stderr)
@@ -1401,14 +1403,23 @@ def cmd_metrics(args, settings):
         # диагностика без MOEX: что видно на странице компании у агентства и что вычитывается из релизов
         from .data.fundamentals import digest_release, release_links, _site_base
         from .data.metrics import MetricsBook, extract_metrics
+        from .data.ratings import RatingsBook
         import re as _re
         probe_book = MetricsBook.from_csv(path)
-        for url in args.query or []:
-            if not url.startswith("http"):          # имя эмитента → адрес карточки из книги метрик
-                hit = next((m for m in probe_book.items if url.upper() in m.key.upper()), None)
-                if hit is None or not hit.url:
-                    print(f"{url}: в книге метрик нет адреса карточки"); continue
-                url = hit.url
+        rbook = RatingsBook.from_csv(settings.get("data", "ratings_csv", default="data/ratings.csv"))
+        targets: list[str] = []
+        for q in args.query or []:
+            if q.startswith("http"):
+                targets.append(q); continue
+            # имя эмитента → карточки компании из книги рейтингов (Rating.url) и адрес релиза из книги метрик
+            urls = [r.url for r in rbook.all if r.url and q.upper() in r.subject.upper()]
+            hit = next((m for m in probe_book.items if q.upper() in m.key.upper()), None)
+            if hit is not None and hit.url:
+                urls.append(hit.url)
+            if not urls:
+                print(f"{q}: адресов карточек/релизов в книгах нет"); continue
+            targets.extend(dict.fromkeys(urls))
+        for url in targets:
             st, _, page = web_fetch(url)
             print(f"{url}: HTTP {st}, {len(page)} байт")
             # ИНН на странице: нужен для точного запроса в ГИР БО (по имени ВДО-эмитенты путаются с тёзками)
