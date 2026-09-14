@@ -1449,9 +1449,17 @@ def cmd_metrics(args, settings):
         if not with_url:
             skipped += 1
             continue
-        c = next((x for x in with_url if x.agency == "Эксперт РА"), with_url[0])
-        digests, diag = fetch_releases(c.url, web_fetch, limit=args.releases)
-        m = metrics_from_digests(key, c.agency, sectors.get(key, ""), digests)
+        # сначала Эксперт РА (числа пишет стабильно), затем остальные агентства — пока в каком-нибудь релизе не найдутся числа
+        # (у АБЗ-1 релиз Эксперт РА без чисел, а в релизе НКР по поручителю есть долг/OIBDA и покрытие)
+        ordered = sorted({x.url: x for x in with_url}.values(), key=lambda x: (x.agency != "Эксперт РА", x.agency))
+        m, c, diag = None, ordered[0], ""
+        for cand in ordered:
+            digests, diag = fetch_releases(cand.url, web_fetch, limit=args.releases)
+            got = metrics_from_digests(key, cand.agency, sectors.get(key, ""), digests)
+            if got is not None and (m is None or (got.has_metrics and not m.has_metrics)):
+                m, c = got, cand
+            if m is not None and m.has_metrics:
+                break
         if m is None:
             failed += 1
             print(f"[{i}/{len(keys)}] {key}: релизы не прочитаны ({diag})", file=sys.stderr)
