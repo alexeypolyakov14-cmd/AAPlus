@@ -1,12 +1,14 @@
-"""ГИР БО ФНС (bo.nalog.ru): годовая бухгалтерская отчётность юрлиц по РСБУ.
+"""ГИР БО ФНС (bo.nalog.gov.ru; до 2026 — bo.nalog.ru): годовая бухгалтерская отчётность юрлиц по РСБУ.
 
 Сайт — SPA, интерфейс которого ходит в недокументированный JSON-бэкенд:
-  GET /nbo/organizations/search?query=<ИНН или название>&page=0&size=20   -> {"content":[{id, inn, shortName, ...}]}
-  GET /advanced-search/organizations/search?query=...                      -> то же (второй вариант)
+  GET /advanced-search/organizations/search?query=<ИНН или название>&page=0&size=20 -> {"content":[{id, inn, shortName, ...}]}
+     (проверено 14.09.2026 в браузере: именно этот путь на bo.nalog.gov.ru; старый /nbo/organizations/search — запасной)
   GET /nbo/organizations/{orgId}/bfo/                                      -> [{period:"2024", correction:[{id,...}]}]
   GET /nbo/bfo/{bfoId}/details                                             -> [{balance:{current1600,...}, financialResult:{current2110,...}}]
 
 Важно: из-за рубежа сайт отдаёт HTML-заглушку (геоблок), поэтому загрузка работает только из РФ.
+Старый домен bo.nalog.ru теперь отдаёт HTML даже из РФ — API живёт на bo.nalog.gov.ru. Хост можно переопределить
+переменной окружения BONDTRADER_GIRBO_BASE. Браузер шлёт cookie disclaimed=true (принятый дисклеймер) — ставим её тоже.
 Парсер терпим к деталям структуры: рекурсивно собирает все поля вида current1600 / previous2110.
 Единицы измерения — по ОКЕИ (384 тыс. руб., 385 млн руб., 383 руб.); в Statement всё приводится к тыс. руб.
 """
@@ -27,9 +29,9 @@ from .tls import ru_ca_bundle
 
 log = logging.getLogger(__name__)
 
-BASE = "https://bo.nalog.ru"
-SEARCH_PATHS = ["/nbo/organizations/search?query={q}&page=0&size=20",
-                "/advanced-search/organizations/search?query={q}&page=0&size=20"]
+BASE = os.environ.get("BONDTRADER_GIRBO_BASE", "https://bo.nalog.gov.ru")
+SEARCH_PATHS = ["/advanced-search/organizations/search?query={q}&page=0&size=20",
+                "/nbo/organizations/search?query={q}&page=0&size=20"]
 BFO_PATH = "/nbo/organizations/{org_id}/bfo/"
 DETAILS_PATH = "/nbo/bfo/{bfo_id}/details"
 
@@ -47,7 +49,9 @@ class GirboClient:
         self.timeout = timeout
         self.s = session or requests.Session()
         self.s.headers.update(HEADERS)
-        self.s.headers.update({"Accept": "application/json, text/plain, */*", "X-Requested-With": "XMLHttpRequest"})
+        self.s.headers.update({"Accept": "application/json, text/plain, */*", "X-Requested-With": "XMLHttpRequest",
+                               "Referer": base + "/"})
+        self.s.cookies.set("disclaimed", "true", domain=base.split("//", 1)[-1])
         self.verify = ru_ca_bundle() or True
 
     def get_json(self, path: str) -> Any:
@@ -56,7 +60,7 @@ class GirboClient:
         ctype = r.headers.get("Content-Type", "")
         if r.status_code != 200 or "json" not in ctype:
             head = re.sub(r"\s+", " ", r.text[:160])
-            raise GirboUnavailable(f"{url}: HTTP {r.status_code} {ctype or '-'} — ГИР БО доступен только из РФ; ответ: {head!r}")
+            raise GirboUnavailable(f"{url}: HTTP {r.status_code} {ctype or '-'} — ГИР БО доступен только из РФ (и только на bo.nalog.gov.ru); ответ: {head!r}")
         return r.json()
 
     # ---- организации ----
