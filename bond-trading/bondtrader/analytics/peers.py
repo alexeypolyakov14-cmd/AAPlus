@@ -31,6 +31,38 @@ class PeerStats:
     pct_rank: float                 # доля пиров со спредом ниже (0..1); 0.9 — бумага дороже 90% похожих
     peers: list = field(default_factory=list)   # ScreenRow пиров (без самой бумаги)
     widened: int = 0                # сколько шагов расширения понадобилось (0 — точная группа)
+    trimmed: int = 0                # сколько стрессовых пиров исключено из ориентира (спред кратно выше группы)
+
+
+STRESS_GAP = 1.4                    # разрыв между соседними спредами (кратно), по которому группа делится на «здоровых» и «стрессовых»
+STRESS_MULT = 1.8                   # верхняя часть считается стрессовой, если её медиана выше медианы нижней в STRESS_MULT раз
+
+
+def trim_stressed(spreads: list[float], min_keep: int = 3, gap: float = STRESS_GAP, mult: float = STRESS_MULT, rounds: int = 2) -> list[float]:
+    """Оставляет здоровую часть группы пиров. Сортируем спреды, ищем самый большой кратный разрыв между соседями;
+    если он ≥ gap и верхняя часть в среднем в mult раз шире нижней — верхнюю отбрасываем (до rounds раз).
+    Зачем: в A- сейчас половина группы — Самолёт и Брусника с 900–1850 б.п., медиана 528, и здоровые ИЭК/Софтлайн
+    на 390–410 выглядят «дешевле пиров». Межквартильный размах и итеративная медиана тут не помогают: выбросов
+    слишком много. Ориентиром должна быть здоровая часть; стрессовые остаются в pct_rank и в списке пиров.
+    Широкий, но плавный разброс ВДО (1000…2100 без разрыва) не режется."""
+    sp = sorted(spreads)
+    for _ in range(rounds):
+        if len(sp) < min_keep + 1:
+            break
+        best_i, best_ratio = -1, 0.0
+        for i in range(min_keep - 1, len(sp) - 1):
+            if sp[i] <= 50:                        # около нуля кратность не имеет смысла (AAA, отрицательные спреды)
+                continue
+            ratio = sp[i + 1] / sp[i]
+            if ratio > best_ratio:
+                best_i, best_ratio = i, ratio
+        if best_i < 0 or best_ratio < gap:
+            break
+        lower, upper = sp[:best_i + 1], sp[best_i + 1:]
+        if statistics.median(upper) < mult * statistics.median(lower):
+            break
+        sp = lower
+    return sp
 
 
 def _grade(r) -> Optional[int]:
@@ -106,10 +138,14 @@ def peer_stats(r, universe: list, **kw) -> PeerStats:
     sp = sorted(x.metrics.g_spread for x in peers)
     if not sp:
         return PeerStats(label, 0, float("nan"), float("nan"), float("nan"), 0.0, 0.0, [], widened)
-    med = statistics.median(sp)
+    core = trim_stressed(sp)
+    med = statistics.median(core)
     my = r.metrics.g_spread
-    below = sum(1 for s in sp if s < my)
-    return PeerStats(label, len(sp), med, sp[len(sp) // 4], sp[(3 * len(sp)) // 4], my - med, below / len(sp), peers, widened)
+    below = sum(1 for s in sp if s < my)          # место среди всех пиров, включая стрессовых
+    trimmed = len(sp) - len(core)
+    if trimmed:
+        label += f", без {trimmed} стрессовых"
+    return PeerStats(label, len(core), med, core[len(core) // 4], core[(3 * len(core)) // 4], my - med, below / len(sp), peers, widened, trimmed)
 
 
 def peer_table(universe: list, **kw) -> dict[str, PeerStats]:

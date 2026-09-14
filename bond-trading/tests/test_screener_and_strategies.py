@@ -468,3 +468,28 @@ def test_history_near_offer_is_flagged_and_excluded_from_history_rank():
     ctx = MarketContext(settle, rows, None, None, Portfolio(cash=1e6), {}, {"O1": st_soon, "O2": st_far}, {})
     st = make_strategy("gspread", {"top_n": 5, "rank": "history", "min_excess_bp": 100, "per_issuer": 0})
     assert list(st.targets(ctx)) == ["O2"]
+
+
+def test_peer_median_ignores_stressed_names():
+    """Группа A-: половина пиров под стрессом (900–1850 б.п.) — ориентир считается по здоровой части (≈400),
+    иначе ИЭК/Софтлайн на 390–410 выглядят «дешевле пиров»; стрессовые остаются в pct_rank."""
+    from datetime import date
+    from bondtrader.analytics.peers import peer_stats, trim_stressed
+    from bondtrader.data.ratings import Rating
+    from bondtrader.models import Bond, BondMetrics, Quote
+    from bondtrader.screener import ScreenRow
+
+    assert trim_stressed([386, 396, 406, 495, 564, 890, 928, 972, 985, 1003, 1413, 1432, 1847]) == [386, 396, 406, 495, 564]
+    assert trim_stressed([300, 320, 350]) == [300, 320, 350]                  # мало пиров — не трогаем
+    assert trim_stressed([1000, 1100, 1200, 1500, 1900, 2100]) == [1000, 1100, 1200, 1500, 1900, 2100]   # ВДО: разброс широкий, но не кратный
+
+    def row(secid, spread, dur=1.5):
+        b = Bond(secid, name=secid)
+        q = Quote(secid, date(2025, 6, 2), price=100.0, turnover=5e6)
+        m = BondMetrics(secid, 100.0, 1000.0, 20.0, None, 20.0, dur, dur * 0.9, 0, 0.1, 1.5, 15, spread)
+        return ScreenRow(b, q, m, rating=Rating("x", "y", "A-"), sector="other")
+    uni = [row("IEK", 406), row("S1", 386), row("S2", 396), row("S3", 495), row("S4", 564),
+           row("D1", 890), row("D2", 972), row("D3", 1003), row("D4", 1413), row("D5", 1847)]
+    ps = peer_stats(uni[0], uni, min_peers=5, dur_window=1.0)
+    assert ps.trimmed == 5 and ps.n == 4 and ps.median == 445.5 and ps.excess == 406 - 445.5 and ps.group.endswith("без 5 стрессовых")
+    assert ps.pct_rank == 2 / 9                                               # среди всех девяти пиров дешевле только двое
