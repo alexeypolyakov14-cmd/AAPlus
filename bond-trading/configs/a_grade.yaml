@@ -52,7 +52,7 @@ risk:
   max_unrated_share: 1.00         # см. шапку: в бэктесте рейтингов нет
   min_rating: ""
   max_sector_share: 0.50          # два дорожника (АБЗ-1, Автобан) в одной корзине
-  fin_hard_stops: true
+  fin_hard_stops: false           # РСБУ холдингов/SPV (Аэрофьюэлз Групп, Автобан-Финанс) не отражает бизнес; для ступени A кредит смотрим по релизам агентств (ось quality)
 
 strategy:
   name: gspread
