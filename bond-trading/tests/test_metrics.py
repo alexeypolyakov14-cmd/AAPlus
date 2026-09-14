@@ -154,3 +154,16 @@ def test_years_and_amounts_are_not_ratios():
     # лизинг и банки — финансовый сектор, ступень по бенчмаркам не считается
     assert sector_of("ГТЛК 2P-03", "ГТЛК АО 002Р-03") == "leasing" and sector_of("Европлн1Р9", "Европлан ЛК ПАО 001P-09") == "leasing"
     assert implied_grade(AgencyMetrics("k", "s", "a", "u", coverage=1.0, sector="leasing")) is None
+
+
+def test_candidates_wide_sees_company_page_behind_isin_issue_rating():
+    """Бумага с ISIN в таблице эмиссий НКР: candidates() возвращает только рейтинг выпуска (без ссылки на компанию),
+    candidates_wide() добавляет карточку Эксперт РА по названию — иначе metrics fetch считает, что релизов нет."""
+    from bondtrader.data.ratings import Rating, RatingsBook
+    from bondtrader.models import Bond
+    b = Bond("RU000A1089G0", name="ГИДРОМАШ02", full_name="Гидромашсервис АО 02", isin="RU000A1089G0")
+    book = RatingsBook([Rating("Гидромашсервис АО 02", "НКР", "A+", kind="issue", isin="RU000A1089G0"),
+                        Rating("Гидромашсервис", "Эксперт РА", "A", url="https://raexpert.ru/database/companies/gms/")])
+    assert all(not r.url for r in book.candidates(b))
+    wide = book.candidates_wide(b)
+    assert [r.agency for r in wide] == ["НКР", "Эксперт РА"] and wide[1].url.endswith("/gms/")

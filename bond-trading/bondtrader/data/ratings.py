@@ -144,6 +144,27 @@ class RatingsBook:
                 return out
         return []
 
+    def candidates_wide(self, bond: Bond, emitter_id: Optional[str] = None) -> list[Rating]:
+        """Все записи об эмитенте: по ISIN, по emitter_id, по псевдониму и по совпадению названия (без ранней остановки).
+        candidates() останавливается на первом уровне — для бумаги с ISIN в таблице эмиссий НКР это только рейтинг
+        выпуска без ссылки на страницу компании, а карточка Эксперт РА с релизами остаётся невидимой."""
+        out: list[Rating] = list(self.candidates(bond, emitter_id))
+        seen = {id(r) for r in out}
+        name = _norm_name(bond.name)
+        for alias, r in self.by_alias:
+            if alias and name.startswith(alias) and id(r) not in seen:
+                out.append(r); seen.add(id(r))
+        if bond.full_name:
+            scored = [(issuer_same(subject, bond.full_name), subject) for subject in self.by_subject]
+            best = max((sc for sc, _ in scored), default=0.0)
+            if best > 0:
+                for sc, subject in scored:
+                    if sc == best:
+                        for r in self.by_subject[subject]:
+                            if id(r) not in seen:
+                                out.append(r); seen.add(id(r))
+        return out
+
     def lookup(self, bond: Bond, emitter_id: Optional[str] = None) -> Optional[Rating]:
         cands = self.candidates(bond, emitter_id)
         if not cands:

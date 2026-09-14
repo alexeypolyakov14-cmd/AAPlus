@@ -1444,7 +1444,7 @@ def cmd_metrics(args, settings):
         if not args.refresh and have is not None and have.has_metrics:
             kept += 1
             continue
-        cands = snap.ratings.candidates(bond)
+        cands = snap.ratings.candidates_wide(bond)
         with_url = [c for c in cands if c.url]
         if not with_url:
             skipped += 1
