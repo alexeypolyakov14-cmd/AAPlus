@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 import sys
 from datetime import date, timedelta
 from typing import Optional
@@ -851,9 +852,12 @@ def cmd_financials(args, settings):
         book, issuers = FinancialsBook.from_csv(fin_path), IssuerMap.from_csv(iss_path)
         queries: list[tuple[str, Optional[object]]] = [(q, None) for q in (args.query or [])]
         if args.from_screen:
+            from .data.fundamentals import inn_from_agency
+            from .data.ratings_web import fetch as web_fetch
             snap = load_snapshot(settings, args.fixtures)
             rows = _screen(snap, settings, args)
             seen: set[str] = set()
+            found_inn = 0
             for r in rows:
                 if r.bond.is_ofz or r.sector in ("gov", "subfed"):   # у регионов и Минфина нет отчётности в ГИР БО
                     continue
@@ -861,9 +865,18 @@ def cmd_financials(args, settings):
                 if key in seen:
                     continue
                 seen.add(key)
-                # ищем по имени эмитента без серии (поиск ГИР БО по подстроке цепляется за серию: «П02-БО-14» → ООО «КЭМП02»),
-                # а проверяем кандидата по полному имени выпуска (find_org: слова + форма собственности)
-                queries.append((r.inn or r.bond.issuer_key, r.bond))
+                inn = r.inn
+                if not inn and snap.ratings is not None and not getattr(args, "no_agency_inn", False):
+                    # ИНН с карточки агентства (Эксперт РА / НКР): у ВДО-эмитентов много тёзок, поиск по имени в ГИР БО путается
+                    inn, where = inn_from_agency(snap.ratings.candidates_wide(r.bond), web_fetch)
+                    if inn:
+                        found_inn += 1
+                        print(f"{r.bond.issuer_key}: ИНН {inn} с карточки {where}", file=sys.stderr)
+                # без ИНН ищем по имени эмитента без серии (поиск ГИР БО по подстроке цепляется за серию: «П02-БО-14» → ООО «КЭМП02»),
+                # а кандидата проверяем по полному имени выпуска (find_org: слова + форма собственности)
+                queries.append((inn or r.bond.issuer_key, r.bond))
+            if found_inn:
+                print(f"ИНН с карточек агентств: {found_inn}", file=sys.stderr)
         client = GirboClient()
         ok, failed = 0, 0
         for q, bond in queries:
@@ -882,9 +895,10 @@ def cmd_financials(args, settings):
             for st in sts:
                 book.add(st)
             inn = str(org.get("inn") or "")
-            if inn and bond is not None and issuers.lookup(bond) is None:
-                issuers.add(IssuerRecord(inn, org.get("shortName") or org.get("fullName") or "", alias=bond.name.split()[0] if bond.name else "",
-                                         emitter_id=""))
+            if inn and bond is not None and (issuers.lookup(bond) is None or issuers.lookup(bond).inn != inn):
+                # запись карты: алиас без серии (первое слово имени без цифр серии), плюс ISIN выпуска для точного совпадения
+                alias = re.sub(r"[0-9].*$", "", bond.name.split()[0]) if bond.name else ""
+                issuers.add(IssuerRecord(inn, org.get("shortName") or org.get("fullName") or "", alias=alias, isin=bond.isin or "", emitter_id=""))
             ok += 1
             latest = book.metrics(inn) if inn else None
             print(f"{q}: {org.get('shortName') or org.get('fullName')} ИНН {inn}: отчётов {len(sts)}"
@@ -1610,6 +1624,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("financials", parents=[common], help="отчётность эмитентов (ГИР БО): fetch | show | coverage | discover")
     sp.add_argument("action", choices=["fetch", "show", "coverage", "discover"])
     sp.add_argument("--query", nargs="*", help="ИНН или названия эмитентов (fetch/show/discover)")
+    sp.add_argument("--no-agency-inn", action="store_true", help="fetch --from-screen: не искать ИНН на карточках агентств (только карта ИНН и поиск по имени)")
     sp.add_argument("--from-screen", action="store_true", help="fetch: все эмитенты из текущего скрина")
     sp.add_argument("--years", type=int, default=3); sp.add_argument("--refresh", action="store_true", help="fetch: игнорировать кэш")
     screen_opts(sp); sp.set_defaults(fn=cmd_financials)

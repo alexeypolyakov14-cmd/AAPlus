@@ -177,3 +177,38 @@ def fetch_releases(company_url: str, fetch, limit: int = 2) -> tuple[list[Releas
         if st == 200 and body:
             out.append(digest_release(url, body))
     return out, f"релизов на странице {len(links)}, прочитано {len(out)}"
+
+
+# ---- ИНН эмитента с карточки агентства -----------------------------------------------------------------------------
+_INN_RE = re.compile(r"ИНН\D{0,20}(\d{10})\b")
+_OGRN_RE = re.compile(r"ОГРН\D{0,20}(\d{13})\b")
+
+
+def inn_from_page(page_html: str) -> tuple[Optional[str], Optional[str]]:
+    """(ИНН, ОГРН) с карточки компании у агентства (Эксперт РА, НКР). У ВДО-эмитентов много тёзок (ООО «ВУШ» в Воронеже,
+    НП «ПСБ»), поэтому запрос в ГИР БО по имени ненадёжен; ИНН с карточки делает его точным."""
+    text = _text(page_html)
+    inn = _INN_RE.search(text)
+    ogrn = _OGRN_RE.search(text)
+    return (inn.group(1) if inn else None), (ogrn.group(1) if ogrn else None)
+
+
+def inn_from_agency(candidates, fetch) -> tuple[Optional[str], str]:
+    """ИНН по карточкам агентств из записей рейтингов (Rating.url): (ИНН, адрес карточки, где нашли) или (None, диагностика)."""
+    seen: set[str] = set()
+    for c in candidates:
+        url = getattr(c, "url", "")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        try:
+            st, _, page = fetch(url)
+        except Exception as e:  # noqa: BLE001
+            log.warning("карточка %s: %s", url, e)
+            continue
+        if st != 200 or not page:
+            continue
+        inn, _ = inn_from_page(page)
+        if inn:
+            return inn, url
+    return None, ("карточек агентств нет" if not seen else f"ИНН не найден на {len(seen)} карточках")

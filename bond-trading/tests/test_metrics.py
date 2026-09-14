@@ -167,3 +167,18 @@ def test_candidates_wide_sees_company_page_behind_isin_issue_rating():
     assert all(not r.url for r in book.candidates(b))
     wide = book.candidates_wide(b)
     assert [r.agency for r in wide] == ["НКР", "Эксперт РА"] and wide[1].url.endswith("/gms/")
+
+
+def test_inn_from_agency_card():
+    from bondtrader.data.fundamentals import inn_from_agency, inn_from_page
+    page = "<div><span>ИНН</span><span>7708186108</span> <b>ОГРН:</b> 1027739283274 ... ИНН 1234567890123</div>"
+    assert inn_from_page(page) == ("7708186108", "1027739283274")
+    assert inn_from_page("<p>без реквизитов 1234567890</p>") == (None, None)
+
+    class R:  # noqa: D401 — запись рейтинга с адресом карточки
+        def __init__(self, url): self.url = url
+    pages = {"https://ratings.ru/ratings/issuers/Polyplast/": (200, "", page), "https://raexpert.ru/database/companies/x/": (200, "", "<p>нет</p>")}
+    fetch = lambda u: pages.get(u, (404, "", ""))
+    assert inn_from_agency([R(""), R("https://raexpert.ru/database/companies/x/"), R("https://ratings.ru/ratings/issuers/Polyplast/")], fetch) == \
+        ("7708186108", "https://ratings.ru/ratings/issuers/Polyplast/")
+    assert inn_from_agency([R("https://raexpert.ru/database/companies/x/")], fetch)[0] is None
