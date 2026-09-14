@@ -257,6 +257,16 @@ class MoexClient:
             log.warning("bondization %s: %s", bond.secid, e)
             return bond
 
+    def emitter_info(self, secid_or_isin: str) -> dict:
+        """Эмитент бумаги из поиска ISS: {"emitent_id", "emitent_title", "emitent_inn", "emitent_okpo"} или {}.
+        Единственный источник ИНН, доступный из CI: карточки агентств и описание бумаги ИНН не содержат,
+        а ГИР БО по имени путает ВДО-эмитентов с тёзками (ООО «ВУШ» в Воронеже, НП «ПСБ»)."""
+        payload = self.fetch_json("/iss/securities.json", {"q": secid_or_isin}, ttl=86400 * 7)
+        for row in table(payload, "securities"):
+            if str(row.get("secid") or "").upper() == secid_or_isin.upper() or str(row.get("isin") or "").upper() == secid_or_isin.upper():
+                return {k: row.get(k) for k in ("emitent_id", "emitent_title", "emitent_inn", "emitent_okpo")}
+        return {}
+
     def security_description(self, secid: str) -> dict:
         payload = self.fetch_json(f"/iss/securities/{secid}.json", {"iss.only": "description"}, ttl=86400)
         return {r.get("name"): r.get("value") for r in table(payload, "description")}

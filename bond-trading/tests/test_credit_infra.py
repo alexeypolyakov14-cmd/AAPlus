@@ -373,3 +373,26 @@ def test_girbo_find_org_validates_candidates():
     assert _opf_compatible('ООО "АЭРОФЬЮЭЛЗ ГРУПП"', "Аэрофьюэлз 002Р-06")
     # ИНН — как раньше, точное совпадение
     assert Fake([{"inn": "7804016807", "shortName": 'АО "АБЗ-1"'}]).find_org("7804016807")["inn"] == "7804016807"
+
+
+def test_moex_emitter_info_and_issuer_map_replace():
+    """ИНН эмитента из MOEX ISS (emitent_inn по ISIN) и замена ошибочной записи карты ИНН (тёзка по имени → точный ИНН)."""
+    from bondtrader.data.financials import IssuerMap, IssuerRecord
+    from bondtrader.data.moex import MoexClient
+    from bondtrader.models import Bond
+
+    class Fake(MoexClient):
+        def __init__(self):
+            super().__init__(cache=None)
+        def fetch_json(self, path, params=None, ttl=300, retries=5):
+            assert path == "/iss/securities.json" and params["q"] == "RU000A10G122"
+            return {"securities": {"columns": ["secid", "shortname", "isin", "emitent_id", "emitent_title", "emitent_inn", "emitent_okpo"],
+                                   "data": [["RU000A10G122", "ПолипП2Б17", "RU000A10G122", 3592, 'Акционерное общество "Полипласт"', "7708186108", "58042865"]]}}
+    info = Fake().emitter_info("RU000A10G122")
+    assert info["emitent_inn"] == "7708186108" and info["emitent_id"] == 3592
+    b = Bond("RU000A10G122", name="ПолипП2Б17", full_name="Полипласт АО П02-БО-17", isin="RU000A10G122")
+    m = IssuerMap([IssuerRecord("7718814016", 'АО "ГК ПОЛИПЛАСТ"', alias="ПолипП2Б17")])
+    assert m.lookup(b).inn == "7718814016"
+    removed = m.replace_for(b, IssuerRecord("7708186108", 'АО "Полипласт"', alias="ПолипП", isin="RU000A10G122", emitter_id="3592"))
+    assert removed == 1 and m.lookup(b).inn == "7708186108" and len(m) == 1
+    assert m.replace_for(b, IssuerRecord("7708186108", "x")) == 0 and len(m) == 1      # уже верно — ничего не меняем

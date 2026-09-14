@@ -407,6 +407,22 @@ class IssuerMap:
     def __len__(self) -> int:
         return len(self.records)
 
+    def replace_for(self, bond, record: "IssuerRecord") -> int:
+        """Заменяет записи, которые сейчас сопоставляются с бумагой (по ISIN/алиасу/имени), на record.
+        Нужна, когда точный ИНН (MOEX ISS) не совпал с тем, что было найдено по имени. Возвращает число убранных."""
+        removed = 0
+        while True:
+            old = self.lookup(bond)
+            if old is None or old.inn == record.inn:
+                break
+            self.records = [r for r in self.records if r is not old]
+            self.by_isin = {k: v for k, v in self.by_isin.items() if v is not old}
+            self.by_emitter = {k: v for k, v in self.by_emitter.items() if v is not old}
+            removed += 1
+        if self.lookup(bond) is None:
+            self.add(record)
+        return removed
+
     def lookup(self, bond, emitter_id: Optional[str] = None) -> Optional[IssuerRecord]:
         from .ratings import _norm_name, issuer_match
         if bond.isin and bond.isin.upper() in self.by_isin:

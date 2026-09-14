@@ -852,33 +852,46 @@ def cmd_financials(args, settings):
         book, issuers = FinancialsBook.from_csv(fin_path), IssuerMap.from_csv(iss_path)
         queries: list[tuple[str, Optional[object]]] = [(q, None) for q in (args.query or [])]
         if args.from_screen:
-            from .data.fundamentals import inn_from_agency
-            from .data.ratings_web import fetch as web_fetch
+            from .data.moex import MoexClient
             snap = load_snapshot(settings, args.fixtures)
             rows = _screen(snap, settings, args)
+            from .data.cache import SqliteCache
+            moex = None
+            if not args.fixtures and not getattr(args, "no_moex_inn", False):
+                moex = MoexClient(cache=SqliteCache(settings.get("data", "cache_path", default="data/cache/http_cache.sqlite")))
             seen: set[str] = set()
-            found_inn = 0
+            found_inn = fixed = 0
             for r in rows:
                 if r.bond.is_ofz or r.sector in ("gov", "subfed"):   # у регионов и Минфина нет отчётности в ГИР БО
                     continue
-                key = r.inn or r.bond.issuer_key
-                if key in seen:
+                if r.bond.issuer_key in seen:
                     continue
-                seen.add(key)
+                seen.add(r.bond.issuer_key)
                 inn = r.inn
-                if not inn and snap.ratings is not None and not getattr(args, "no_agency_inn", False):
-                    # ИНН с карточки агентства (Эксперт РА / НКР) или из релиза (книга метрик): у ВДО-эмитентов много тёзок,
-                    # поиск по имени в ГИР БО путается
-                    am = snap.agency_metrics.lookup(r.bond.issuer_key) if snap.agency_metrics is not None else None
-                    inn, where = inn_from_agency(snap.ratings.candidates_wide(r.bond), web_fetch, extra_urls=[am.url] if am and am.url else [])
-                    if inn:
+                if moex is not None:
+                    # точный ИНН эмитента из MOEX ISS (emitent_inn по ISIN): у ВДО-эмитентов много тёзок, и поиск ГИР БО по имени
+                    # раньше подтягивал ООО «ВУШ» из Воронежа и НП «ПСБ»; карточки агентств ИНН не содержат
+                    try:
+                        info = moex.emitter_info(r.bond.isin or r.secid)
+                    except Exception as e:  # noqa: BLE001
+                        info = {}
+                        print(f"{r.bond.issuer_key}: MOEX ISS не ответил ({str(e)[:80]})", file=sys.stderr)
+                    iss_inn = re.sub(r"\D", "", str(info.get("emitent_inn") or ""))
+                    if len(iss_inn) in (10, 12):
                         found_inn += 1
-                        print(f"{r.bond.issuer_key}: ИНН {inn} с карточки {where}", file=sys.stderr)
+                        if inn and inn != iss_inn:
+                            fixed += 1
+                            print(f"{r.bond.issuer_key}: в карте ИНН {inn}, по MOEX {iss_inn} ({info.get('emitent_title')}) — заменяю", file=sys.stderr)
+                        inn = iss_inn
+                        alias = re.sub(r"[0-9].*$", "", r.bond.name.split()[0]) if r.bond.name else ""
+                        issuers.replace_for(r.bond, IssuerRecord(inn, str(info.get("emitent_title") or ""), alias=alias, isin=r.bond.isin or "",
+                                                                 emitter_id=str(info.get("emitent_id") or "")))
                 # без ИНН ищем по имени эмитента без серии (поиск ГИР БО по подстроке цепляется за серию: «П02-БО-14» → ООО «КЭМП02»),
                 # а кандидата проверяем по полному имени выпуска (find_org: слова + форма собственности)
                 queries.append((inn or r.bond.issuer_key, r.bond))
             if found_inn:
-                print(f"ИНН с карточек агентств: {found_inn}", file=sys.stderr)
+                print(f"ИНН из MOEX ISS: {found_inn}, исправлено сопоставлений: {fixed}", file=sys.stderr)
+                issuers.to_csv(iss_path)
         client = GirboClient()
         ok, failed = 0, 0
         for q, bond in queries:
@@ -1642,7 +1655,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("financials", parents=[common], help="отчётность эмитентов (ГИР БО): fetch | show | coverage | discover")
     sp.add_argument("action", choices=["fetch", "show", "coverage", "discover"])
     sp.add_argument("--query", nargs="*", help="ИНН или названия эмитентов (fetch/show/discover)")
-    sp.add_argument("--no-agency-inn", action="store_true", help="fetch --from-screen: не искать ИНН на карточках агентств (только карта ИНН и поиск по имени)")
+    sp.add_argument("--no-moex-inn", action="store_true", help="fetch --from-screen: не брать ИНН из MOEX ISS (только карта ИНН и поиск по имени)")
     sp.add_argument("--from-screen", action="store_true", help="fetch: все эмитенты из текущего скрина")
     sp.add_argument("--years", type=int, default=3); sp.add_argument("--refresh", action="store_true", help="fetch: игнорировать кэш")
     screen_opts(sp); sp.set_defaults(fn=cmd_financials)
