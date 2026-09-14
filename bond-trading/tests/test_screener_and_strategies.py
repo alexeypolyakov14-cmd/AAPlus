@@ -479,17 +479,28 @@ def test_peer_median_ignores_stressed_names():
     from bondtrader.models import Bond, BondMetrics, Quote
     from bondtrader.screener import ScreenRow
 
-    assert trim_stressed([386, 396, 406, 495, 564, 890, 928, 972, 985, 1003, 1413, 1432, 1847]) == [386, 396, 406, 495, 564]
+    a_minus = [(386, "ИЭК"), (396, "БОРЕЦ"), (406, "СОФТЛАЙН"), (495, "АБЗ-1"), (564, "БИННОФАРМ"),
+               (890, "БРУСНИКА"), (928, "БРУСНИКА"), (972, "БРУСНИКА"), (985, "БРУСНИКА"), (1003, "БРУСНИКА"),
+               (1413, "САМОЛЕТ"), (1432, "САМОЛЕТ"), (1847, "САМОЛЕТ")]
+    assert trim_stressed(a_minus) == [386, 396, 406, 495, 564]              # 5 здоровых эмитентов против 2 стрессовых
     assert trim_stressed([300, 320, 350]) == [300, 320, 350]                  # мало пиров — не трогаем
     assert trim_stressed([1000, 1100, 1200, 1500, 1900, 2100]) == [1000, 1100, 1200, 1500, 1900, 2100]   # ВДО: разброс широкий, но не кратный
+    # BBB+: три бумаги двух эмитентов на ~270 и семь эмитентов на 600–1800 — норма ступени широкая, нижнее меньшинство не ориентир
+    bbb_plus = [(262, "X"), (273, "X"), (280, "Y"), (628, "ГЛОРАКС"), (633, "ЛЕГЕНДА"), (724, "РОЛЬФ"), (859, "ПР-ЛИЗ"),
+                (1033, "ЭТАЛОН"), (1134, "ВОКСИС"), (1814, "КАРРУС")]
+    assert trim_stressed(bbb_plus) == sorted(x for x, _ in bbb_plus)
 
-    def row(secid, spread, dur=1.5):
-        b = Bond(secid, name=secid)
+    def row(secid, spread, dur=1.5, rated=True):
+        b = Bond(secid, name=secid, full_name=secid.rstrip("0123456789") + " ООО БО-01")
         q = Quote(secid, date(2025, 6, 2), price=100.0, turnover=5e6)
         m = BondMetrics(secid, 100.0, 1000.0, 20.0, None, 20.0, dur, dur * 0.9, 0, 0.1, 1.5, 15, spread)
-        return ScreenRow(b, q, m, rating=Rating("x", "y", "A-"), sector="other")
-    uni = [row("IEK", 406), row("S1", 386), row("S2", 396), row("S3", 495), row("S4", 564),
-           row("D1", 890), row("D2", 972), row("D3", 1003), row("D4", 1413), row("D5", 1847)]
+        return ScreenRow(b, q, m, rating=Rating("x", "y", "A-") if rated else None, sector="other")
+    uni = [row("IEK", 406), row("SOFT1", 386), row("BOREC1", 396), row("ABZ1", 495), row("BINN1", 564),
+           row("BRUS1", 890), row("BRUS2", 972), row("BRUS3", 1003), row("SAM1", 1413), row("SAM2", 1847)]
     ps = peer_stats(uni[0], uni, min_peers=5, dur_window=1.0)
     assert ps.trimmed == 5 and ps.n == 4 and ps.median == 445.5 and ps.excess == 406 - 445.5 and ps.group.endswith("без 5 стрессовых")
     assert ps.pct_rank == 2 / 9                                               # среди всех девяти пиров дешевле только двое
+    # без рейтинга разброс структурный (ВДО против квазисуверенов без рейтинга) — ориентир не режем
+    unr = [row(f"U{i}", s, rated=False) for i, s in enumerate([120, 130, 700, 900, 1100, 1500, 1900])]
+    ps = peer_stats(unr[2], unr, min_peers=3, dur_window=1.0)
+    assert ps.trimmed == 0 and ps.n == 6

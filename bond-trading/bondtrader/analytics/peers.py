@@ -38,31 +38,34 @@ STRESS_GAP = 1.4                    # разрыв между соседними
 STRESS_MULT = 1.8                   # верхняя часть считается стрессовой, если её медиана выше медианы нижней в STRESS_MULT раз
 
 
-def trim_stressed(spreads: list[float], min_keep: int = 3, gap: float = STRESS_GAP, mult: float = STRESS_MULT, rounds: int = 2) -> list[float]:
-    """Оставляет здоровую часть группы пиров. Сортируем спреды, ищем самый большой кратный разрыв между соседями;
-    если он ≥ gap и верхняя часть в среднем в mult раз шире нижней — верхнюю отбрасываем (до rounds раз).
-    Зачем: в A- сейчас половина группы — Самолёт и Брусника с 900–1850 б.п., медиана 528, и здоровые ИЭК/Софтлайн
-    на 390–410 выглядят «дешевле пиров». Межквартильный размах и итеративная медиана тут не помогают: выбросов
-    слишком много. Ориентиром должна быть здоровая часть; стрессовые остаются в pct_rank и в списке пиров.
-    Широкий, но плавный разброс ВДО (1000…2100 без разрыва) не режется."""
-    sp = sorted(spreads)
+def trim_stressed(items: list, min_keep: int = 3, gap: float = STRESS_GAP, mult: float = STRESS_MULT, rounds: int = 2) -> list[float]:
+    """Здоровая часть группы пиров. items — спреды или пары (спред, эмитент). Сортируем, ищем самый большой кратный
+    разрыв между соседями; если он ≥ gap, верхняя часть в mult раз шире нижней И нижняя часть — большинство
+    эмитентов группы, верхнюю отбрасываем (до rounds раз). Считаем по эмитентам, а не по выпускам: в A- сейчас
+    Самолёт и Брусника семью выпусками на 900–1850 б.п. делают медиану 528, и здоровые ИЭК/Софтлайн на 390–410
+    выглядят «дешевле пиров»; по эмитентам же здоровых пять против двух. Обратный случай — BBB+, где три бумаги
+    на ~270 и семь эмитентов на 600–1800: там широкий спред и есть норма ступени, нижнее меньшинство не ориентир.
+    Стрессовые остаются в pct_rank и в списке пиров. Для групп без рейтинга не применяется (см. peer_stats)."""
+    pairs = sorted((float(x[0]), str(x[1])) if isinstance(x, (tuple, list)) else (float(x), f"#{i}") for i, x in enumerate(items))
     for _ in range(rounds):
-        if len(sp) < min_keep + 1:
+        if len(pairs) < min_keep + 1:
             break
         best_i, best_ratio = -1, 0.0
-        for i in range(min_keep - 1, len(sp) - 1):
-            if sp[i] <= 50:                        # около нуля кратность не имеет смысла (AAA, отрицательные спреды)
+        for i in range(min_keep - 1, len(pairs) - 1):
+            if pairs[i][0] <= 50:                  # около нуля кратность не имеет смысла (AAA, отрицательные спреды)
                 continue
-            ratio = sp[i + 1] / sp[i]
+            ratio = pairs[i + 1][0] / pairs[i][0]
             if ratio > best_ratio:
                 best_i, best_ratio = i, ratio
         if best_i < 0 or best_ratio < gap:
             break
-        lower, upper = sp[:best_i + 1], sp[best_i + 1:]
-        if statistics.median(upper) < mult * statistics.median(lower):
+        lower, upper = pairs[:best_i + 1], pairs[best_i + 1:]
+        if statistics.median(x for x, _ in upper) < mult * statistics.median(x for x, _ in lower):
             break
-        sp = lower
-    return sp
+        if len({k for _, k in lower}) < len({k for _, k in upper}):
+            break
+        pairs = lower
+    return [x for x, _ in pairs]
 
 
 def _grade(r) -> Optional[int]:
@@ -138,7 +141,7 @@ def peer_stats(r, universe: list, **kw) -> PeerStats:
     sp = sorted(x.metrics.g_spread for x in peers)
     if not sp:
         return PeerStats(label, 0, float("nan"), float("nan"), float("nan"), 0.0, 0.0, [], widened)
-    core = trim_stressed(sp)
+    core = trim_stressed([(x.metrics.g_spread, x.bond.issuer_key) for x in peers]) if _grade(r) is not None else sp
     med = statistics.median(core)
     my = r.metrics.g_spread
     below = sum(1 for s in sp if s < my)          # место среди всех пиров, включая стрессовых
