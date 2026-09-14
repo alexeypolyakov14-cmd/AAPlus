@@ -1386,10 +1386,22 @@ def cmd_metrics(args, settings):
     if args.action == "probe":
         # диагностика без MOEX: что видно на странице компании у агентства и что вычитывается из релизов
         from .data.fundamentals import digest_release, release_links, _site_base
-        from .data.metrics import extract_metrics
+        from .data.metrics import MetricsBook, extract_metrics
+        import re as _re
+        probe_book = MetricsBook.from_csv(path)
         for url in args.query or []:
+            if not url.startswith("http"):          # имя эмитента → адрес карточки из книги метрик
+                hit = next((m for m in probe_book.items if url.upper() in m.key.upper()), None)
+                if hit is None or not hit.url:
+                    print(f"{url}: в книге метрик нет адреса карточки"); continue
+                url = hit.url
             st, _, page = web_fetch(url)
             print(f"{url}: HTTP {st}, {len(page)} байт")
+            # ИНН на странице: нужен для точного запроса в ГИР БО (по имени ВДО-эмитенты путаются с тёзками)
+            text = _re.sub(r"<[^>]+>", " ", page)
+            inns = sorted({m.group(1) for m in _re.finditer(r"ИНН\D{0,20}(\d{10})\b", text)})
+            ogrns = sorted({m.group(1) for m in _re.finditer(r"ОГРН\D{0,20}(\d{13})\b", text)})
+            print(f"  ИНН на странице: {inns or 'не найден'}; ОГРН: {ogrns or 'не найден'}")
             links = release_links(page, base=_site_base(url))
             if links:
                 print(f"  ссылок на релизы: {len(links)}; первые: " + ", ".join(links[:args.releases]))
