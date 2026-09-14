@@ -731,12 +731,17 @@ def cmd_ratings(args, settings):
             got += load_raexpert()
         if "acra" in sources:
             got += load_acra_press(max_pages=args.pages if args.pages > 3 else 120)
-        seen = {(r.subject, r.agency, r.kind, r.isin, r.date) for r in book.all}
-        added = 0
+        existing = {(r.subject, r.agency, r.kind, r.isin, r.date): r for r in book.all}
+        seen = set(existing)
+        added = linked = 0
         for r in got:
             key = (r.subject, r.agency, r.kind, r.isin, r.date)
             if key not in seen:
                 book.add(r); seen.add(key); added += 1
+            elif r.url and not existing[key].url:
+                existing[key].url = r.url; linked += 1      # АКРА накопительно: старым записям доклеиваем адрес релиза
+        if linked:
+            print(f"Адреса релизов проставлены у {linked} старых записей", file=sys.stderr)
         book.to_csv(path)
         by_agency = {}
         for r in book.all:

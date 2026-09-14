@@ -182,3 +182,20 @@ def test_inn_from_agency_card():
     assert inn_from_agency([R(""), R("https://raexpert.ru/database/companies/x/"), R("https://ratings.ru/ratings/issuers/Polyplast/")], fetch) == \
         ("7708186108", "https://ratings.ru/ratings/issuers/Polyplast/")
     assert inn_from_agency([R("https://raexpert.ru/database/companies/x/")], fetch)[0] is None
+
+
+def test_acra_release_url_and_ffo_metrics():
+    """АКРА: адрес релиза попадает в Rating.url, страница без ссылок читается как сам релиз, нагрузка по FFO — аналог долг/EBITDA."""
+    from bondtrader.data.fundamentals import fetch_releases
+    from bondtrader.data.ratings_web import parse_acra_press
+    lst = ('<span class="item__emit">ООО «Сибсульфур»</span> <a class="item__title" href="/press-releases/12345/">'
+           'АКРА подтвердило кредитный рейтинг ООО «Сибсульфур» на уровне B(RU), прогноз «Стабильный»</a> 10.09.2026')
+    rs = parse_acra_press(lst)
+    assert len(rs) == 1 and rs[0].url == "https://www.acra-ratings.ru/press-releases/12345/" and rs[0].rating == "B"
+    page = ("<h1>АКРА подтвердило кредитный рейтинг ООО «Сибсульфур» на уровне B(RU)</h1><p>10.09.2026. "
+            "По итогам 2025 года отношение общего долга к FFO до чистых процентных платежей составило 2,3x, а покрытие "
+            "процентных платежей (отношение FFO до чистых процентных платежей к процентным платежам) — 3,5x.</p>")
+    digests, diag = fetch_releases("https://www.acra-ratings.ru/press-releases/12345/", lambda u: (200, "text/html", page))
+    assert len(digests) == 1 and "сам релиз" in diag
+    m = extract_metrics(digests[0].sentences, digests[0].title)
+    assert m["debt_ebitda"] == 2.3 and m["coverage"] == 3.5 and m["period"] == "2025" and m["rating"] == "B"

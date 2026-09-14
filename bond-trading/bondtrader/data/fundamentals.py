@@ -25,7 +25,7 @@ _RELEASE_HREF_RE = re.compile(r"""href=["']([^"']*(?:/releases/\d{4}/[^"'#?]+|/r
 _TAG_RE = re.compile(r"<(script|style)[^>]*>.*?</\1>|<[^>]+>", re.S | re.I)
 _TITLE_RE = re.compile(r"<h1[^>]*>(.*?)</h1>|<title>(.*?)</title>", re.S | re.I)
 _DATE_RE = re.compile(r"(\d{1,2})[./](\d{2})[./](\d{4})")
-KEYWORDS = ("долг", "ebitda", "oibda", "покрыти", "ликвидн", "выручк", "рентабельн", "капитал", "левередж", "леверидж",
+KEYWORDS = ("долг", "ebitda", "oibda", "ffo", "покрыти", "ликвидн", "выручк", "рентабельн", "капитал", "левередж", "леверидж",
             "процентн", "fcf", "денежн", "маржин", "прибыл", "обязательств", "погашен", "рефинанс", "оферт")
 BASE = "https://raexpert.ru"
 
@@ -166,6 +166,10 @@ def fetch_releases(company_url: str, fetch, limit: int = 2) -> tuple[list[Releas
     # релизы по выпускам («…-bonds-RA-…», «…-RA-bond-…») чисел по эмитенту не содержат — сначала релизы по компании
     links.sort(key=lambda u: "bond" in u.rsplit("/", 2)[-2].lower() if u.rstrip("/").count("/") >= 3 else False)
     if not links:
+        # у АКРА карточек компаний нет — адрес из книги рейтингов ведёт прямо на пресс-релиз, читаем его самого
+        d = digest_release(company_url, page)
+        if d.sentences:
+            return [d], "страница — сам релиз (АКРА), прочитан"
         return [], f"на странице компании не найдено ссылок на релизы ({len(page)} байт; возможно, список подгружается скриптом)"
     out: list[ReleaseDigest] = []
     for url in links[:limit]:

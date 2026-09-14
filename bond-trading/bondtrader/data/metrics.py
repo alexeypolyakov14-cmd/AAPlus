@@ -27,8 +27,11 @@ _NUM = r"(\d+(?:[.,]\d+)?)"
 _X = r"\s*[xхX]\b"
 _RE_NET_LEV = re.compile(r"чист[а-я]*\s+долг[а-я]*\s*(?:/|к|в\s+терминах[^.]*?/)\s*EBITDA[^.;]*?" + _NUM + _X, re.I)
 _RE_NET_LEV2 = re.compile(r"(?:чистый\s+долг\s*/\s*EBITDA|ND\s*/\s*EBITDA)[^.;]*?" + _NUM + _X, re.I)
-_RE_GROSS_LEV = re.compile(r"(?:совокупн[а-я]*|общ[а-я]*)\s+долг[а-я]*\s*(?:/|к)\s*(?:EBITDA|OIBDA)[^.;]*?" + _NUM + _X, re.I)
-_RE_GROSS_LEV2 = re.compile(r"(?:долг|долга)\s*(?:/|к)\s*(?:EBITDA|OIBDA)[^.;]*?" + _NUM + _X, re.I)
+# АКРА считает нагрузку через FFO («отношение общего долга к FFO до чистых процентных платежей … 2,3x») — принимаем как
+# аналог долг/EBITDA (FFO до процентов ≈ EBITDA минус налоги; нагрузка по FFO чуть выше, ступень получается консервативнее)
+_RE_GROSS_LEV = re.compile(r"(?:совокупн[а-я]*|общ[а-я]*)\s+долг[а-я]*\s*(?:/|к)\s*(?:EBITDA|OIBDA|FFO)[^.;]*?" + _NUM + _X, re.I)
+_RE_GROSS_LEV2 = re.compile(r"(?:долг|долга)\s*(?:/|к)\s*(?:EBITDA|OIBDA|FFO)[^.;]*?" + _NUM + _X, re.I)
+_RE_COV_ACRA = re.compile(r"(?:покрыти[а-я]*\s+(?:процентн[а-я]+|фиксированн[а-я]+)\s+платеж[а-я]*|FFO[^.;]*?(?:к|/)\s*(?:процентн[а-я]+|фиксированн[а-я]+)\s+платеж[а-я]*|обслуживани[ея]\s+долга)[^.;]*?" + _NUM + _X, re.I)
 _RE_PREV = re.compile(_NUM + _X + r"\s*годом\s+ранее", re.I)
 _RE_COV = re.compile(r"(?:покрыти[а-я]*\s+процент[а-я]*[^.;]*?|EBITDA\s*/\s*(?:%%|проценты|процентн[а-я]*\s+расход[а-я]*)[^.;]*?)" + _NUM + _X, re.I)
 _RE_COV_DOWN = re.compile(r"(?:покрыти[а-я]*\s+процент[а-я]*|EBITDA\s*/\s*%%)[^.;]*?(?:снизил[а-я]*|составил[а-я]*|вырос[а-я]*)\s+до\s+" + _NUM + _X, re.I)
@@ -170,6 +173,8 @@ def extract_metrics(sentences: list[str], title: str = "") -> dict:
     cov = _first(_RE_COV_DOWN, sentences, _cov_ok)
     if cov is None:
         cov = _first(_RE_COV, sentences, _cov_ok)
+    if cov is None:
+        cov = _first(_RE_COV_ACRA, sentences, _cov_ok)
     if cov is None:
         cov = _first(_RE_COV_NKR, sentences, _cov_ok)
     if cov is None:

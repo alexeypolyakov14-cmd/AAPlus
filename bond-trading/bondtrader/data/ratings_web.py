@@ -482,6 +482,7 @@ def load_raexpert(max_pages: int = 80, client: Optional[RaexpertClient] = None) 
 
 
 # ---- АКРА: пресс-релизы (серверный HTML, блоки documents-row) ----
+ACRA_BASE = "https://www.acra-ratings.ru"
 _ACRA_ITEM_RE = re.compile(r'<span class="item__emit">(.*?)</span>.*?<a class="item__title"[^>]*href="([^"]*)"[^>]*>(.*?)</a>', re.S | re.I)
 _ACRA_LEVEL_RE = re.compile(r"(?:ДО УРОВНЯ|НА УРОВНЕ|УРОВНЯ|РЕЙТИНГ)\s+([ABC]{1,3}[+-]?)\(RU\)", re.I)
 _ACRA_ANY_RE = re.compile(r"([ABC]{1,3}[+-]?)\(RU\)")
@@ -512,7 +513,9 @@ def parse_acra_press(text: str, withdrawn: Optional[set] = None) -> list[Rating]
         tail = text[m.end(): m.end() + 1500]
         dm = _DATE_RE.search(tail)
         d = date(int(dm.group(3)), int(dm.group(2)), int(dm.group(1))) if dm else None
-        out.append(Rating(subject=emit or title, agency="АКРА", rating=rating, date=d, kind=kind))
+        href = html.unescape(m.group(2) or "")
+        url = href if href.startswith("http") else (ACRA_BASE + href if href else "")
+        out.append(Rating(subject=emit or title, agency="АКРА", rating=rating, date=d, kind=kind, url=url))
     return out
 
 
