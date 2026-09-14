@@ -1374,6 +1374,31 @@ def cmd_metrics(args, settings):
     from .data.metrics import MetricsBook, implied_grade, metrics_from_digests, rating_gap
     from .data.ratings_web import fetch as web_fetch
     path = settings.get("data", "metrics_csv", default="data/metrics.csv")
+    if args.action == "probe":
+        # диагностика без MOEX: что видно на странице компании у агентства и что вычитывается из релизов
+        from .data.fundamentals import digest_release, release_links, _site_base
+        from .data.metrics import extract_metrics
+        for url in args.query or []:
+            st, _, page = web_fetch(url)
+            print(f"{url}: HTTP {st}, {len(page)} байт")
+            links = release_links(page, base=_site_base(url))
+            if links:
+                print(f"  ссылок на релизы: {len(links)}; первые: " + ", ".join(links[:args.releases]))
+            else:
+                d = digest_release(url, page)
+                print(f"  ссылок на релизы нет — читаю как релиз: «{d.title}» {d.date}, предложений с метриками {len(d.sentences)}")
+                links = []
+                for sent in d.sentences[:12]:
+                    print(f"    • {sent[:220]}")
+                print(f"  извлечено: {extract_metrics(d.sentences, d.title)}")
+            for rel in links[:args.releases]:
+                st2, _, body = web_fetch(rel)
+                d = digest_release(rel, body)
+                print(f"  {rel}: HTTP {st2}, «{d.title}» {d.date}, предложений {len(d.sentences)}")
+                for sent in d.sentences[:8]:
+                    print(f"    • {sent[:220]}")
+                print(f"    извлечено: {extract_metrics(d.sentences, d.title)}")
+        return
     book = MetricsBook.from_csv(path)
     if args.action in ("list", "show"):
         items = book.items
@@ -1614,8 +1639,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--shifts", default="-300,-150,0,150,300,500", help="сдвиги доходности, б.п., через запятую")
     sp.add_argument("--csv"); sp.set_defaults(fn=cmd_scenario)
     sp = sub.add_parser("metrics", parents=[common], help="метрики из релизов агентств (долг/EBITDA, покрытие) и ступень по ним: fetch | list | show"); screen_opts(sp)
-    sp.add_argument("action", choices=["fetch", "list", "show"])
-    sp.add_argument("--query", nargs="*", help="эмитенты (часть названия/SECID/ISIN)"); sp.add_argument("--from-screen", action="store_true", help="fetch: все эмитенты скрина")
+    sp.add_argument("action", choices=["fetch", "list", "show", "probe"])
+    sp.add_argument("--query", nargs="*", help="эмитенты (часть названия/SECID/ISIN); probe: адреса страниц компании/релиза у агентства"); sp.add_argument("--from-screen", action="store_true", help="fetch: все эмитенты скрина")
     sp.add_argument("--releases", type=int, default=3, help="fetch: сколько последних релизов просматривать в поисках чисел")
     sp.add_argument("--refresh", action="store_true", help="fetch: перечитать и эмитентов, у которых числа уже есть")
     sp.add_argument("--min-gap", type=int, help="list: только разрыв не ниже"); sp.add_argument("--csv"); sp.set_defaults(fn=cmd_metrics)

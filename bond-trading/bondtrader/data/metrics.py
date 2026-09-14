@@ -39,9 +39,21 @@ _RE_PERIOD_YEAR = re.compile(r"по\s+итогам\s+(\d{4})\s+года", re.I)
 _RE_PERIOD_DATE = re.compile(r"на\s+(\d{2}\.\d{2}\.\d{4})", re.I)
 _RE_TITLE_RATING = re.compile(r"\bru([ABC]{1,3}[+-]?)(?![A-Za-z])|\b([ABC]{1,3}[+-]?)\s*(?:\.ru\b|\(RU\))", re.I)
 _RE_PERIOD_YEAR2 = re.compile(r"за\s+(\d{4})\s+год", re.I)
-# НКР пишет метрики без «x»: «отношение совокупного долга к OIBDA … составило 2,5», «покрытие процентов … составило 1,9»
-_RE_GROSS_LEV_NKR = re.compile(r"долг[а-я]*\s+к\s+(?:EBITDA|OIBDA)\)?[^.;]*?составил[а-я]*\s+" + _NUM + r"(?![\d.,]*\s*(?:%|млрд|млн))", re.I)
-_RE_COV_NKR = re.compile(r"покрыти[ея]\s+процентов[^.;]*?(?:OIBDA|EBITDA)\)?[^.;]*?составил[а-я]*\s+" + _NUM + r"(?![\d.,]*\s*(?:%|млрд|млн))", re.I)
+# НКР пишет метрики без «x»: «отношение совокупного долга к OIBDA … составило 2,5», «… выросло до 3,9 с 3,3 в 2023 году»,
+# «коэффициент долговой нагрузки (совокупный долг / OIBDA) за 12 месяцев, завершившихся 30.06.2025, составил 2,5»,
+# «покрытие процентов … (OIBDA) … составило 1,9». Число берётся только сразу после глагола («составило», «выросло до»),
+# чтобы не зацепить год или прогноз; проценты и суммы в млрд/млн отсекаются.
+_VERB = r"(?:составил[а-я]*|выросл[а-я]*|увеличил[а-я]*|снизил[а-я]*|уменьшил[а-я]*|сократил[а-я]*|остал[а-я]+|находил[а-я]+|оценивал[а-я]+)"
+_LEAD = r"\s+(?:до\s+|на\s+уровне\s+|уровне\s+|на\s+отметке\s+|около\s+|в\s+|порядка\s+)?"
+_NOT_AMOUNT = r"(?![\d.,]*\s*(?:%|млрд|млн|п\.\s*п\.|раз))"
+_GAP = r"(?:[^.;]|\.(?=\d))*?"          # внутри предложения; точка допустима только в дате/числе («завершившихся 30.06.2025»)
+_AFTER = r"(?:" + _VERB + _LEAD + r"|\s*[—–-]\s*)"   # «составил 2,5» или «(OIBDA / процентные расходы) — 3,1»
+_RE_GROSS_LEV_NKR = re.compile(r"(?:долг[а-я]*\s*(?:к|/)\s*(?:EBITDA|OIBDA)\)?|долгов[а-я]+\s+нагрузк[а-я]+)" + _GAP + _AFTER + _NUM + _NOT_AMOUNT, re.I)
+_RE_COV_NKR = re.compile(r"покрыти[ея]\s+процент[а-я]*" + _GAP + r"(?:OIBDA|EBITDA)\)?" + _GAP + _AFTER + _NUM + _NOT_AMOUNT, re.I)
+_RE_COV_NKR2 = re.compile(r"(?:покрыти[ея]\s+процент[а-я]*|(?:OIBDA|EBITDA)\s*(?:к|/)\s*процентн[а-я]+\s+расход[а-я]+\)?)" + _GAP + _AFTER + _NUM + _NOT_AMOUNT, re.I)
+_RE_PERIOD_END = re.compile(r"на\s+конец\s+(\d{4})\s+года", re.I)
+_RE_PERIOD_LTM = re.compile(r"завершивш[а-я]+\s+(\d{2}\.\d{2}\.\d{4})", re.I)
+_RE_TITLE_RATING_TO = re.compile(r"\bдо\s+(?:уровня\s+)?(?:ru([ABC]{1,3}[+-]?)(?![A-Za-z])|([ABC]{1,3}[+-]?)\s*(?:\.ru\b|\(RU\)))", re.I)
 
 
 def _f(s: str) -> float:
@@ -128,6 +140,8 @@ def extract_metrics(sentences: list[str], title: str = "") -> dict:
         cov = _first(_RE_COV, sentences)
     if cov is None:
         cov = _first(_RE_COV_NKR, sentences)
+    if cov is None:
+        cov = _first(_RE_COV_NKR2, sentences)
     if cov is not None:
         out["coverage"] = cov
     m = _first(_RE_MARGIN, sentences)
@@ -150,12 +164,13 @@ def extract_metrics(sentences: list[str], title: str = "") -> dict:
             break
     if "period" not in out:
         for s in sentences:
-            y = _RE_PERIOD_YEAR2.search(s)
+            y = _RE_PERIOD_END.search(s) or _RE_PERIOD_YEAR2.search(s) or _RE_PERIOD_LTM.search(s)
             if y:
                 out["period"] = y.group(1)
                 break
     if title:
-        t = _RE_TITLE_RATING.search(title)
+        # «повысило … с A-.ru до A.ru»: итоговый рейтинг — после «до»
+        t = _RE_TITLE_RATING_TO.search(title) or _RE_TITLE_RATING.search(title)
         if t:
             r = normalize_rating(t.group(1) or t.group(2))
             if r:

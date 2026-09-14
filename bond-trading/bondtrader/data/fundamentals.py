@@ -20,11 +20,12 @@ from ..models import Bond, Quote
 
 log = logging.getLogger(__name__)
 
-_RELEASE_HREF_RE = re.compile(r"""href=["']([^"']*/releases/\d{4}/[^"'#?]+)["']""", re.I)
+# Эксперт РА: /releases/2026/sep10a; НКР: /ratings/press-releases/Polyplast-RA-101125/
+_RELEASE_HREF_RE = re.compile(r"""href=["']([^"']*(?:/releases/\d{4}/[^"'#?]+|/ratings/press-releases/[^"'#?/]+/?))["']""", re.I)
 _TAG_RE = re.compile(r"<(script|style)[^>]*>.*?</\1>|<[^>]+>", re.S | re.I)
 _TITLE_RE = re.compile(r"<h1[^>]*>(.*?)</h1>|<title>(.*?)</title>", re.S | re.I)
 _DATE_RE = re.compile(r"(\d{1,2})[./](\d{2})[./](\d{4})")
-KEYWORDS = ("долг", "ebitda", "покрыти", "ликвидн", "выручк", "рентабельн", "капитал", "левередж", "леверидж",
+KEYWORDS = ("долг", "ebitda", "oibda", "покрыти", "ликвидн", "выручк", "рентабельн", "капитал", "левередж", "леверидж",
             "процентн", "fcf", "денежн", "маржин", "прибыл", "обязательств", "погашен", "рефинанс", "оферт")
 BASE = "https://raexpert.ru"
 
@@ -82,11 +83,20 @@ def _text(html_text: str) -> str:
     return re.sub(r"\s+", " ", html.unescape(_TAG_RE.sub(" ", html_text))).strip()
 
 
+def _site_base(url: str) -> str:
+    """https://host по ссылке на страницу компании (относительные ссылки на релизы достраиваются к тому же сайту)."""
+    m = re.match(r"(https?://[^/]+)", url or "")
+    return m.group(1) if m else BASE
+
+
 def release_links(company_html: str, base: str = BASE) -> list[str]:
-    """Ссылки на пресс-релизы со страницы компании, в порядке появления (у Эксперт РА — свежие первыми), без дублей."""
+    """Ссылки на пресс-релизы со страницы компании, в порядке появления (у Эксперт РА и НКР — свежие первыми), без дублей.
+    Сама страница списка релизов (…/press-releases/ без слага) не считается."""
     out: list[str] = []
     for href in _RELEASE_HREF_RE.findall(company_html):
         href = html.unescape(href)
+        if re.search(r"/press-releases/?$", href):
+            continue
         url = href if href.startswith("http") else base + href
         if url not in out:
             out.append(url)
@@ -137,7 +147,7 @@ def fetch_releases(company_url: str, fetch, limit: int = 2) -> tuple[list[Releas
         return [], f"страница компании недоступна: {e}"
     if status != 200 or not page:
         return [], f"страница компании: HTTP {status}"
-    links = release_links(page)
+    links = release_links(page, base=_site_base(company_url))
     if not links:
         return [], f"на странице компании не найдено ссылок на релизы ({len(page)} байт; возможно, список подгружается скриптом)"
     out: list[ReleaseDigest] = []

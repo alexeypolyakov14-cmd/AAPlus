@@ -89,3 +89,35 @@ def test_quality_stats_and_rank_quality():
     assert picks == ["GMS1"], picks   # АБЗ-1 отсечён разрывом, «без метрик» не участвует
     assert "метрики: чистый долг/EBITDA 1.7x" in st.reason(rows[0], ctx) and "разрыв +1" in st.reason(rows[0], ctx)
     assert "метрики: нет в книге" in st.reason(rows[2], ctx)
+
+
+def test_extract_nkr_wording_variants():
+    """НКР: «выросло до 3,9 с 3,3», «за 12 месяцев, завершившихся 30.06.2025, составил 2,5», «(OIBDA / процентные расходы) — 3,1»;
+    в заголовке «с A-.ru до A.ru» итоговый рейтинг — после «до»; суммы в млрд, проценты и «в 1,5 раза» не числа нагрузки."""
+    m = extract_metrics(["Отношение совокупного долга к OIBDA по методологии НКР по итогам 2024 года выросло до 3,9 с 3,3 в 2023 году, "
+                         "агентство ожидает снижения показателя до 3,6 в 2025 году."],
+                        "НКР повысило кредитный рейтинг АО «Полипласт» с A-.ru до A.ru, прогноз — стабильный")
+    assert m["debt_ebitda"] == 3.9 and m["period"] == "2024" and m["rating"] == "A"
+    m = extract_metrics(["Коэффициент долговой нагрузки (совокупный долг / OIBDA) за 12 месяцев, завершившихся 30.06.2025, составил 2,5, "
+                         "а коэффициент покрытия процентов (OIBDA / процентные расходы) — 3,1."], "")
+    assert m["debt_ebitda"] == 2.5 and m["coverage"] == 3.1 and m["period"] == "30.06.2025"
+    m = extract_metrics(["Отношение совокупного долга к OIBDA с корректировками НКР на денежные средства на счетах эскроу составило 4,6 на конец 2024 года.",
+                         "Покрытие процентных расходов операционной прибылью OIBDA в 2024 году снизилось до 1,4."], "")
+    assert m["debt_ebitda"] == 4.6 and m["coverage"] == 1.4 and m["period"] == "2024"
+    assert extract_metrics(["Долговая нагрузка компании выросла до 15 млрд руб., а доля краткосрочного долга снизилась до 45%.",
+                            "Долговая нагрузка в 2024 году выросла в 1,5 раза."], "") == {}
+
+
+def test_nkr_issuer_url_and_release_links():
+    from bondtrader.data.fundamentals import _site_base, release_links
+    from bondtrader.data.ratings_web import _company_url_from_cell
+    cell = '<a href="/ratings/issuers/Polyplast/">АО «Полипласт»</a>'
+    assert _company_url_from_cell(cell) == "https://ratings.ru/ratings/issuers/Polyplast/"
+    assert _company_url_from_cell('<a href="/database/companies/polyplast/">Полипласт</a>') == "https://raexpert.ru/database/companies/polyplast/"
+    page = ('<a href="/ratings/press-releases/">Все релизы</a>'
+            '<a href="/ratings/press-releases/Polyplast-RA-101125/">НКР повысило…</a>'
+            '<a href="https://ratings.ru/ratings/press-releases/Polyplast-RA-131124/">НКР присвоило…</a>'
+            '<a href="/ratings/press-releases/Polyplast-RA-101125/">дубль</a>')
+    assert _site_base("https://ratings.ru/ratings/issuers/Polyplast/") == "https://ratings.ru"
+    assert release_links(page, base="https://ratings.ru") == ["https://ratings.ru/ratings/press-releases/Polyplast-RA-101125/",
+                                                              "https://ratings.ru/ratings/press-releases/Polyplast-RA-131124/"]

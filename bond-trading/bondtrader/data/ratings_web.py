@@ -274,15 +274,19 @@ def _issuer_from_cell(cell_html: str) -> str:
 
 
 _COMPANY_HREF_RE = re.compile(r"""href=["']([^"']*/database/companies/[^"']*)["']""", re.I)
+_NKR_ISSUER_HREF_RE = re.compile(r"""href=["']([^"']*/ratings/issuers/[^"'#?]+)["']""", re.I)
+NKR_BASE = "https://ratings.ru"
 
 
 def _company_url_from_cell(cell_html: str) -> str:
-    """Ссылка на страницу компании в базе Эксперт РА (там пресс-релизы с метриками), абсолютная."""
-    m = _COMPANY_HREF_RE.search(cell_html)
-    if not m:
-        return ""
-    href = html.unescape(m.group(1))
-    return href if href.startswith("http") else RAEXPERT_BASE + href
+    """Ссылка на страницу компании у агентства (там список пресс-релизов с метриками), абсолютная:
+    Эксперт РА — /database/companies/…, НКР — /ratings/issuers/<slug>/."""
+    for rx, base in ((_COMPANY_HREF_RE, RAEXPERT_BASE), (_NKR_ISSUER_HREF_RE, NKR_BASE)):
+        m = rx.search(cell_html)
+        if m:
+            href = html.unescape(m.group(1))
+            return href if href.startswith("http") else base + href
+    return ""
 
 
 def parse_table_with_header(text: str, agency: str, kind: str) -> list[Rating]:
