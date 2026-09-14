@@ -1,0 +1,69 @@
+# Профиль «рейтинг A»: корпоративные облигации со ступенями A-, A, A+ по национальной шкале
+# (АКРА / Эксперт РА / НКР, при нескольких агентствах — худший) плюс ядро ликвидности в ОФЗ.
+# Бумаги без рейтинга отсекаются. Портфель 10–15 млн руб., carry + roll-down, до 12 позиций.
+# Запуск: bondtrader -c configs/a_grade.yaml screen --top 40 ; bondtrader -c configs/a_grade.yaml signals
+
+data:
+  boards: [TQOB, TQCB]
+  ratings_csv: data/ratings.csv
+  ratings_conservative: true
+  news_csv: data/news.csv
+
+screener:
+  currency: SUR
+  min_ytm: 0
+  max_ytm: 40
+  min_duration: 0.3
+  max_duration: 5.0
+  min_turnover: 2000000        # ≥2 млн руб./день
+  max_list_level: 2            # A-эмитенты живут на 1–2 уровне листинга
+  exclude_floaters: true
+  exclude_linkers: true
+  exclude_structured: true
+  max_bid_ask_pct: 1.0
+  max_g_spread_bp: 1000        # для ступени A спред выше 1000 б.п. — аномалия, а не подарок
+  min_price: 70
+  min_rating: A-               # ступень A-: ниже — отсев
+  max_rating: A+               # ступень A+: выше (AA-, AA, …) — отсев; ОФЗ проходят как ядро
+  require_rating: true         # без рейтинга — отсев
+  news_days: 90
+  news_stop_score: -8
+
+risk:
+  max_weight_per_bond: 0.08       # корпоративная бумага ≤ 8%
+  max_weight_per_bond_ofz: 0.25
+  max_weight_per_issuer: 0.12
+  max_corporate_share: 0.85
+  min_portfolio_duration: 0.8
+  max_portfolio_duration: 4.0
+  max_g_spread_bp: 800
+  max_turnover_share: 0.05
+  yield_vol_bp_daily: 20
+  max_unrated_share: 0.0          # только бумаги с рейтингом
+  min_rating: A-
+  max_sector_share: 0.35
+
+strategy:
+  name: carry
+  params:
+    top_n: 12
+    horizon: 1.0
+    max_duration: 4.0
+    ofz_min_share: 0.15           # ядро ликвидности; остальное — корпораты ступени A
+  rebalance: monthly
+
+backtest:
+  commission_bp: 5
+  slippage_bp: 10
+  initial_cash: 12000000
+  benchmark: RUCBITR
+  cash_spread_bp: -50
+
+execution:
+  broker: paper
+  state_path: state/portfolio_a.json
+  journal_path: state/orders_a.jsonl
+  tinvest:
+    sandbox: true
+    account_id: ""
+    token_env: TINVEST_TOKEN
