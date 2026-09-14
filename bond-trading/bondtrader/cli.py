@@ -69,6 +69,10 @@ def _screen(snap: MarketSnapshot, settings: Settings, args) -> list[ScreenRow]:
         cfg.max_duration = args.max_duration
     if getattr(args, "min_rating", None):
         cfg.min_rating = args.min_rating
+    if getattr(args, "max_rating", None):
+        cfg.max_rating = args.max_rating
+    if getattr(args, "min_fin_score", None) is not None:
+        cfg.min_fin_score = args.min_fin_score
     scr = Screener(cfg)
     rows = scr.run(snap.universe, snap.curve, snap.settle, **snap.screen_kwargs())
     snap.rejected = dict(scr.rejected)
@@ -1178,7 +1182,12 @@ def cmd_peers(args, settings):
                      "pct_rank": round(ps.pct_rank, 2), "n": ps.n, "group": ps.group,
                      "chg30": None if hs is None or hs.chg30 is None else round(hs.chg30), "z": None if hs is None else round(hs.z, 1),
                      "hist": hs.regime if hs is not None else "н/д", "vs_issuer": None if ist is None else round(ist.resid),
-                     "news": (f"{r.news.score:+.1f}" if r.news is not None and r.news.n else "")})
+                     "news": (f"{r.news.score:+.1f}" if r.news is not None and r.news.n else ""),
+                     # отчётность ГИР БО (РСБУ эмитента): балл 0..100, покрытие процентов EBIT/%, чистый долг/EBIT, флаги
+                     "fin": None if r.fin is None else round(r.fin.score),
+                     "cov": None if r.fin is None or r.fin.interest_coverage is None else round(r.fin.interest_coverage, 1),
+                     "nd_ebit": None if r.fin is None or r.fin.net_debt_to_ebit is None else round(r.fin.net_debt_to_ebit, 1),
+                     "fin_flags": "" if r.fin is None else ";".join(f[:14] for f in r.fin.flags[:2])})
     df = pd.DataFrame(recs).sort_values("excess", ascending=False)
     if args.min_excess:
         df = df[df["excess"] >= args.min_excess]
@@ -1570,6 +1579,8 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--min-turnover", type=float)
         sp.add_argument("--max-duration", type=float)
         sp.add_argument("--min-rating", help="минимальный рейтинг, напр. BB-")
+        sp.add_argument("--max-rating", help="максимальный рейтинг, напр. BB+ (сегмент ВДО); без рейтинга — проходят")
+        sp.add_argument("--min-fin-score", type=float, help="отсев по баллу отчётности ГИР БО (0..100); бумаги без отчётности не трогаем")
 
     def strat_opts(sp):
         sp.add_argument("--strategy", "-s", choices=list(STRATEGIES))
