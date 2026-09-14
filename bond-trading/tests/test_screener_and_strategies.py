@@ -489,6 +489,9 @@ def test_peer_median_ignores_stressed_names():
     bbb_plus = [(262, "X"), (273, "X"), (280, "Y"), (628, "ГЛОРАКС"), (633, "ЛЕГЕНДА"), (724, "РОЛЬФ"), (859, "ПР-ЛИЗ"),
                 (1033, "ЭТАЛОН"), (1134, "ВОКСИС"), (1814, "КАРРУС")]
     assert trim_stressed(bbb_plus) == sorted(x for x, _ in bbb_plus)
+    # A+: три бумаги трёх эмитентов на ~170 против Системы/Автобана/ВИС на 380–800 — нижняя часть слишком мала, чтобы быть нормой
+    a_plus = [(160, "P"), (170, "Q"), (180, "R"), (386, "АВТОБАН"), (317, "ВИС"), (492, "СИСТЕМА"), (511, "СИСТЕМА"), (651, "СИСТЕМА"), (807, "СИСТЕМА")]
+    assert trim_stressed(a_plus) == sorted(x for x, _ in a_plus)
 
     def row(secid, spread, dur=1.5, rated=True):
         b = Bond(secid, name=secid, full_name=secid.rstrip("0123456789") + " ООО БО-01")

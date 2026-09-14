@@ -38,7 +38,8 @@ STRESS_GAP = 1.4                    # разрыв между соседними
 STRESS_MULT = 1.8                   # верхняя часть считается стрессовой, если её медиана выше медианы нижней в STRESS_MULT раз
 
 
-def trim_stressed(items: list, min_keep: int = 3, gap: float = STRESS_GAP, mult: float = STRESS_MULT, rounds: int = 2) -> list[float]:
+def trim_stressed(items: list, min_keep: int = 3, gap: float = STRESS_GAP, mult: float = STRESS_MULT, rounds: int = 2,
+                  min_core: int = 5) -> list[float]:
     """Здоровая часть группы пиров. items — спреды или пары (спред, эмитент). Сортируем, ищем самый большой кратный
     разрыв между соседями; если он ≥ gap, верхняя часть в mult раз шире нижней И нижняя часть — большинство
     эмитентов группы, верхнюю отбрасываем (до rounds раз). Считаем по эмитентам, а не по выпускам: в A- сейчас
@@ -62,7 +63,10 @@ def trim_stressed(items: list, min_keep: int = 3, gap: float = STRESS_GAP, mult:
         lower, upper = pairs[:best_i + 1], pairs[best_i + 1:]
         if statistics.median(x for x, _ in upper) < mult * statistics.median(x for x, _ in lower):
             break
-        if len({k for _, k in lower}) < len({k for _, k in upper}):
+        lower_issuers = {k for _, k in lower}
+        # здоровая часть должна быть не только большинством эмитентов, но и сама по себе группой (≥ min_core бумаг трёх эмитентов):
+        # иначе три бумаги на 170 б.п. объявляют «стрессовой» всю ступень A+ (Система, Автобан, ВИС на 380–800)
+        if len(lower_issuers) < len({k for _, k in upper}) or len(lower) < min_core or len(lower_issuers) < 3:
             break
         pairs = lower
     return [x for x, _ in pairs]
