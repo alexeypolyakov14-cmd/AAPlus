@@ -104,8 +104,29 @@ def test_extract_nkr_wording_variants():
     m = extract_metrics(["Отношение совокупного долга к OIBDA с корректировками НКР на денежные средства на счетах эскроу составило 4,6 на конец 2024 года.",
                          "Покрытие процентных расходов операционной прибылью OIBDA в 2024 году снизилось до 1,4."], "")
     assert m["debt_ebitda"] == 4.6 and m["coverage"] == 1.4 and m["period"] == "2024"
-    assert extract_metrics(["Долговая нагрузка компании выросла до 15 млрд руб., а доля краткосрочного долга снизилась до 45%.",
-                            "Долговая нагрузка в 2024 году выросла в 1,5 раза."], "") == {}
+    junk = extract_metrics(["Долговая нагрузка компании выросла до 15 млрд руб., а доля краткосрочного долга снизилась до 45%.",
+                            "Долговая нагрузка в 2024 году выросла в 1,5 раза."], "")
+    assert "debt_ebitda" not in junk and "coverage" not in junk
+    # «с 1,2 до 0,8» — текущее 0,8, прошлое 1,2; «выросла до 3,9 с 3,3 в 2023 году» — прошлое 3,3; период из предложения с метрикой
+    m = extract_metrics(["Экспорт в 2024 году обеспечивал 36% выручки, по итогам 2025 года ожидается увеличение до 40%.",
+                         "В 2024 году консолидированная долговая нагрузка компании (отношение совокупного долга к OIBDA согласно методологии НКР) "
+                         "выросла до 3,9 с 3,3 в 2023 году, в 2025 году агентство ожидает снижения показателя — до 3,6."], "")
+    assert m["debt_ebitda"] == 3.9 and m["debt_ebitda_prev"] == 3.3 and m["period"] == "2024"
+    m = extract_metrics(["«Автобан» поддерживает низкую долговую нагрузку (отношение совокупный долг/OIBDA), за 2024 год она уменьшилась с 1,2 до 0,8."], "")
+    assert m["debt_ebitda"] == 0.8 and m["debt_ebitda_prev"] == 1.2 and m["period"] == "2024"
+
+
+def test_nkr_release_date_from_slug_and_latest_release_wins():
+    from bondtrader.data.fundamentals import _nkr_slug_date
+    assert _nkr_slug_date("https://ratings.ru/ratings/press-releases/Polyplast-RA-101125/") == date(2025, 11, 10)
+    assert _nkr_slug_date("https://raexpert.ru/releases/2026/sep10a") is None
+    old = ReleaseDigest("u1", "НКР присвоило АО «Полипласт» кредитный рейтинг A-.ru", date(2024, 11, 13),
+                        ["Отношение совокупного долга к OIBDA по итогам 2023 года составило 3,3."])
+    new = ReleaseDigest("u2", "НКР повысило кредитный рейтинг АО «Полипласт» с A-.ru до A.ru", date(2025, 11, 10),
+                        ["В 2024 году отношение совокупного долга к OIBDA выросло до 3,9 с 3,3 в 2023 году."])
+    m = metrics_from_digests("Полипласт", "НКР", "industrial", [old, new])
+    assert m.url == "u2" and m.debt_ebitda == 3.9 and m.debt_ebitda_prev == 3.3 and m.rating == "A"
+    assert "3.3x годом ранее" in m.describe()
 
 
 def test_nkr_issuer_url_and_release_links():

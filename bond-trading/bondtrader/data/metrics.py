@@ -51,7 +51,11 @@ _AFTER = r"(?:" + _VERB + _LEAD + r"|\s*[—–-]\s*)"   # «составил 2,
 _RE_GROSS_LEV_NKR = re.compile(r"(?:долг[а-я]*\s*(?:к|/)\s*(?:EBITDA|OIBDA)\)?|долгов[а-я]+\s+нагрузк[а-я]+)" + _GAP + _AFTER + _NUM + _NOT_AMOUNT, re.I)
 _RE_COV_NKR = re.compile(r"покрыти[ея]\s+процент[а-я]*" + _GAP + r"(?:OIBDA|EBITDA)\)?" + _GAP + _AFTER + _NUM + _NOT_AMOUNT, re.I)
 _RE_COV_NKR2 = re.compile(r"(?:покрыти[ея]\s+процент[а-я]*|(?:OIBDA|EBITDA)\s*(?:к|/)\s*процентн[а-я]+\s+расход[а-я]+\)?)" + _GAP + _AFTER + _NUM + _NOT_AMOUNT, re.I)
+# «за 2024 год она уменьшилась с 1,2 до 0,8» / «выросла до 3,9 с 3,3 в 2023 году» — текущее и прошлое значение
+_RE_LEV_NKR_FROM_TO = re.compile(r"(?:долг[а-я]*\s*(?:к|/)\s*(?:EBITDA|OIBDA)\)?|долгов[а-я]+\s+нагрузк[а-я]+)" + _GAP + _VERB + r"\s+с\s+" + _NUM + r"\s+до\s+" + _NUM + _NOT_AMOUNT, re.I)
+_RE_PREV_NKR = re.compile(r"\s+с\s+" + _NUM + r"\s+(?:в|годом|по\s+итогам|на\s+конец|за)\b", re.I)
 _RE_PERIOD_END = re.compile(r"на\s+конец\s+(\d{4})\s+года", re.I)
+_RE_PERIOD_IN = re.compile(r"\bв\s+(\d{4})\s+году", re.I)
 _RE_PERIOD_LTM = re.compile(r"завершивш[а-я]+\s+(\d{2}\.\d{2}\.\d{4})", re.I)
 _RE_TITLE_RATING_TO = re.compile(r"\bдо\s+(?:уровня\s+)?(?:ru([ABC]{1,3}[+-]?)(?![A-Za-z])|([ABC]{1,3}[+-]?)\s*(?:\.ru\b|\(RU\)))", re.I)
 
@@ -80,6 +84,7 @@ class AgencyMetrics:
     net_debt_ebitda: Optional[float] = None
     net_debt_ebitda_prev: Optional[float] = None
     debt_ebitda: Optional[float] = None
+    debt_ebitda_prev: Optional[float] = None
     coverage: Optional[float] = None
     ebitda_margin: Optional[float] = None
     revenue_bln: Optional[float] = None
@@ -103,7 +108,10 @@ class AgencyMetrics:
                 s += f" ({self.net_debt_ebitda_prev:.1f}x годом ранее)"
             parts.append(s)
         elif self.debt_ebitda is not None:
-            parts.append(f"долг/EBITDA {self.debt_ebitda:.1f}x")
+            s = f"долг/EBITDA {self.debt_ebitda:.1f}x"
+            if self.debt_ebitda_prev is not None:
+                s += f" ({self.debt_ebitda_prev:.1f}x годом ранее)"
+            parts.append(s)
         if self.coverage is not None:
             parts.append(f"покрытие {self.coverage:.1f}x")
         if self.ebitda_margin is not None:
@@ -132,7 +140,18 @@ def extract_metrics(sentences: list[str], title: str = "") -> dict:
     if gross is None and net is None:
         gross = _first(_RE_GROSS_LEV2, sentences)
     if gross is None and net is None:
-        gross = _first(_RE_GROSS_LEV_NKR, sentences)
+        for s in sentences:
+            ft = _RE_LEV_NKR_FROM_TO.search(s)
+            if ft:
+                gross, out["debt_ebitda_prev"] = _f(ft.group(2)), _f(ft.group(1))
+                break
+            m = _RE_GROSS_LEV_NKR.search(s)
+            if m:
+                gross = _f(m.group(1))
+                pv = _RE_PREV_NKR.match(s, m.end())
+                if pv:
+                    out["debt_ebitda_prev"] = _f(pv.group(1))
+                break
     if gross is not None:
         out["debt_ebitda"] = gross
     cov = _first(_RE_COV_DOWN, sentences)
@@ -153,21 +172,18 @@ def extract_metrics(sentences: list[str], title: str = "") -> dict:
     eb = _first(_RE_EBITDA_ABS, sentences)
     if eb is not None:
         out["ebitda_bln"] = eb
-    for s in sentences:
-        y = _RE_PERIOD_YEAR.search(s)
-        if y:
-            out["period"] = y.group(1)
-            break
-        d = _RE_PERIOD_DATE.search(s)
-        if d:
-            out["period"] = d.group(1)
-            break
-    if "period" not in out:
-        for s in sentences:
-            y = _RE_PERIOD_END.search(s) or _RE_PERIOD_YEAR2.search(s) or _RE_PERIOD_LTM.search(s)
+    # период — прежде всего из предложения с нагрузкой/покрытием («В 2024 году … выросла до 3,9»), иначе по всему релизу
+    metric_sents = [s for s in sentences if any(rx.search(s) for rx in (_RE_NET_LEV, _RE_NET_LEV2, _RE_GROSS_LEV, _RE_GROSS_LEV2,
+                                                                          _RE_LEV_NKR_FROM_TO, _RE_GROSS_LEV_NKR, _RE_COV, _RE_COV_NKR, _RE_COV_NKR2))]
+    for group in (metric_sents, sentences):
+        for s in group:
+            y = (_RE_PERIOD_YEAR.search(s) or _RE_PERIOD_DATE.search(s) or _RE_PERIOD_END.search(s) or _RE_PERIOD_YEAR2.search(s)
+                 or _RE_PERIOD_LTM.search(s) or _RE_PERIOD_IN.search(s))
             if y:
                 out["period"] = y.group(1)
                 break
+        if "period" in out:
+            break
     if title:
         # «повысило … с A-.ru до A.ru»: итоговый рейтинг — после «до»
         t = _RE_TITLE_RATING_TO.search(title) or _RE_TITLE_RATING.search(title)
@@ -276,13 +292,16 @@ class MetricsBook:
 
 
 def metrics_from_digests(key: str, agency: str, sector: str, digests) -> Optional[AgencyMetrics]:
-    """Первый (свежий) релиз, в котором нашлись числа; если ни в одном — запись по самому свежему без чисел."""
+    """Самый свежий релиз (по дате), в котором нашлись числа; если ни в одном — первая запись без чисел."""
     best = None
+    with_numbers: list[AgencyMetrics] = []
     for d in digests:
         ext = extract_metrics(d.sentences, d.title)
         m = AgencyMetrics(key=key, subject=d.title, agency=agency, url=d.url, release_date=d.date, sector=sector, **ext)
         if m.has_metrics:
-            return m
-        if best is None:
+            with_numbers.append(m)
+        elif best is None:
             best = m
+    if with_numbers:
+        return max(with_numbers, key=lambda x: x.release_date or date.min)
     return best

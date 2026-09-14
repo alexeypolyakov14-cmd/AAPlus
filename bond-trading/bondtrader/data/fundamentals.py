@@ -116,13 +116,28 @@ class ReleaseDigest:
         return f"{head}\n  {self.url}\n{body}" if body else f"{head}\n  {self.url}\n  (предложений с финансовыми метриками не найдено)"
 
 
+_NKR_SLUG_DATE_RE = re.compile(r"/ratings/press-releases/[^/]*-(\d{2})(\d{2})(\d{2})/?$")
+
+
+def _nkr_slug_date(url: str) -> Optional[date]:
+    """У НКР дата релиза зашита в адрес: …/Polyplast-RA-101125/ = 10.11.2025 (первая дата в тексте — не дата релиза:
+    там отчётная дата или погашение выпуска)."""
+    m = _NKR_SLUG_DATE_RE.search(url or "")
+    if not m:
+        return None
+    try:
+        return date(2000 + int(m.group(3)), int(m.group(2)), int(m.group(1)))
+    except ValueError:
+        return None
+
+
 def digest_release(url: str, page_html: str, max_sentences: int = 40) -> ReleaseDigest:
     """Заголовок, дата и предложения с финансовыми метриками из текста релиза."""
     m = _TITLE_RE.search(page_html)
     title = _text(m.group(1) or m.group(2)) if m else url
     text = _text(page_html)
-    dm = _DATE_RE.search(text)
-    d = None
+    d = _nkr_slug_date(url)
+    dm = None if d else _DATE_RE.search(text)
     if dm:
         try:
             d = date(int(dm.group(3)), int(dm.group(2)), int(dm.group(1)))
@@ -148,6 +163,8 @@ def fetch_releases(company_url: str, fetch, limit: int = 2) -> tuple[list[Releas
     if status != 200 or not page:
         return [], f"страница компании: HTTP {status}"
     links = release_links(page, base=_site_base(company_url))
+    # релизы по выпускам («…-bonds-RA-…», «…-RA-bond-…») чисел по эмитенту не содержат — сначала релизы по компании
+    links.sort(key=lambda u: "bond" in u.rsplit("/", 2)[-2].lower() if u.rstrip("/").count("/") >= 3 else False)
     if not links:
         return [], f"на странице компании не найдено ссылок на релизы ({len(page)} байт; возможно, список подгружается скриптом)"
     out: list[ReleaseDigest] = []
