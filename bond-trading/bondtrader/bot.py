@@ -19,16 +19,17 @@ from .notify import telegram_send, tg_call
 
 log = logging.getLogger(__name__)
 
-ACTIONS = ("report", "positions", "news", "screen", "alerts", "menu", "help")
+ACTIONS = ("report", "basket", "positions", "news", "screen", "alerts", "menu", "help")
 BUTTONS = [
-    [("📊 Отчёт", "report"), ("📋 Позиции", "positions")],
-    [("📰 Новости", "news"), ("🔎 Скрин ВДО", "screen")],
-    [("🚨 Алерты", "alerts")],
+    [("📊 Отчёт", "report"), ("🧺 Корзина", "basket")],
+    [("📋 Позиции", "positions"), ("📰 Новости", "news")],
+    [("🔎 Скрин ВДО", "screen"), ("🚨 Алерты", "alerts")],
 ]
-COMMANDS = {"/start": "help", "/help": "help", "/menu": "menu", "/report": "report", "/positions": "positions",
+COMMANDS = {"/start": "help", "/help": "help", "/menu": "menu", "/report": "report", "/basket": "basket", "/positions": "positions",
             "/news": "news", "/screen": "screen", "/alerts": "alerts"}
 HELP = ("<b>bondtrader</b> — ВДО-портфель на MOEX.\n"
-        "Кнопки ниже (или команды): /report — полный отчёт, /positions — позиции и P&amp;L, /news — новости по позициям и целям, "
+        "Кнопки ниже (или команды): /report — полный отчёт, /basket — корзина (наш список бумаг: цены, премия к пирам, флаги), "
+        "/positions — позиции и P&amp;L, /news — новости по позициям и целям, "
         "/screen — топ кандидатов value_hy, /alerts — стоп-факторы и просадки, /menu — кнопки.\n"
         "Ежедневный отчёт приходит сам в 10:40 МСК по будням.")
 
@@ -47,7 +48,9 @@ def render(action: str, d: Optional[dict]) -> str:
     if action == "report":
         return tg.render_telegram(d)
     parts = [tg.section_header(d)]
-    if action == "positions":
+    if action == "basket":
+        parts += [tg.section_basket(d, flags_limit=25) or ["<b>Корзина</b>: пуста — bondtrader basket add …"]]
+    elif action == "positions":
         parts += [tg.section_portfolio(d), tg.section_positions(d)]
     elif action == "news":
         parts += [tg.section_news(d, days=7, limit=20)]

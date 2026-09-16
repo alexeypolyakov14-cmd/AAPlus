@@ -23,6 +23,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "disclosure_csv": "data/disclosure.csv",     # существенные факты e-disclosure
         "news_csv": "data/news.csv",                 # новостной фон по эмитентам
         "metrics_csv": "data/metrics.csv",           # метрики из релизов агентств (долг/EBITDA, покрытие) и подразумеваемая ступень
+        "basket_csv": "data/books/basket.csv",       # корзина — накопительная книга выбранных бумаг (в репозитории, не в кэше)
+        "basket_log_csv": "",                        # журнал изменений корзины; пусто — рядом с книгой (<basket>_log.csv)
     },
     "screener": {
         "currency": "SUR",

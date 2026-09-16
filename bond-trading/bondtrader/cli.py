@@ -487,9 +487,122 @@ def collect_report(args, settings) -> dict:
     risk = RiskManager(RiskLimits.from_dict(settings.get("risk", default={})))
     pr = risk.portfolio_risk(pf, all_rows)
     marks = {s: (r.metrics.clean_price, r.quote.accrued, r.bond.face_value) for s, r in all_rows.items()}
+    book, basket = _basket(snap, rows, settings)
     return {"snap": snap, "rows": rows, "pf": pf, "broker": broker, "name": name, "targets": targets, "notes": notes,
             "reasons": reasons, "orders": orders, "alerts": alerts, "all_rows": all_rows, "by_id": by_id, "pr": pr,
-            "weights": pf.weights(marks)}
+            "weights": pf.weights(marks), "basket_book": book, "basket": basket}
+
+
+def _basket_book(settings) -> "BasketBook":
+    from .basket import BasketBook
+    return BasketBook.from_csv(settings.get("data", "basket_csv", default="data/books/basket.csv"),
+                               settings.get("data", "basket_log_csv", default=""))
+
+
+def _basket(snap: MarketSnapshot, rows: list[ScreenRow], settings) -> tuple["BasketBook", list]:
+    """Корзина (накопительная книга) и её живой срез: метрики, премия к пирам, история спреда, флаги."""
+    from .basket import basket_rows
+    book = _basket_book(settings)
+    if not book.live():
+        return book, []
+    by_isin = {(b.isin or "").upper(): b.secid for b, _ in snap.universe}
+    only = {by_isin.get(e.isin) or e.secid for e in book.live()}
+    hist, _ = _analytics(snap, rows, only=only)
+    mon = settings.get("monitor", default={}) or {}
+    return book, basket_rows(book, snap, rows, hist=hist, min_turnover=settings.get("screener", "min_turnover", default=1e6),
+                             news_alert=mon.get("news_alert_score", -3.0), peers_kw={"min_peers": 3})
+
+
+def cmd_basket(args, settings):
+    """Корзина — накопительная книга выбранных бумаг: list | status | add | set | log.
+
+    list — книга как есть (без сети); status — живой срез по рынку; add — добавить бумагу (поиск на MOEX по названию/ISIN,
+    либо офлайн с --isin/--secid/--name); set — сменить статус/вес/список с заметкой; log — журнал изменений."""
+    from .basket import LISTS, STATUSES, STATUS_RU
+    book = _basket_book(settings)
+    action = args.action
+    on = date.fromisoformat(args.date) if getattr(args, "date", None) else None
+    if action == "list":
+        if not len(book):
+            print(f"Корзина пуста: {book.path}. Добавить: bondtrader basket add \"ПолипП2Б17\" --list A --weight 8 --note \"…\"")
+            return
+        ents = [e for e in book.entries if args.all or e.live]
+        print(f"Корзина: {book.summary()}  ({book.path})\n")
+        df = pd.DataFrame([{"list": e.list, "secid": e.secid, "isin": e.isin, "name": e.name, "weight": e.weight, "status": STATUS_RU.get(e.status, e.status),
+                            "added": e.added, "changed": e.changed, "note": e.note[:70]} for e in ents])
+        _print_df(df, csv=getattr(args, "csv", None))
+        return
+    if action == "log":
+        for ev in book.log[-args.top:]:
+            print(ev)
+        if not book.log:
+            print("журнал пуст")
+        return
+    if action == "status":
+        snap = load_snapshot(settings, args.fixtures)
+        rows = _screen(snap, settings, args)
+        _header(snap)
+        book, basket = _basket(snap, rows, settings)
+        if not basket:
+            print("Корзина пуста.")
+            return
+        print(f"Корзина: {book.summary()}\n")
+        recs = []
+        for br in basket:
+            e, r = br.entry, br.row
+            recs.append({"list": e.list, "secid": br.secid, "name": br.name, "status": STATUS_RU.get(e.status, e.status), "weight": e.weight,
+                         "rating": r.rating_str if r is not None else "—", "price": None if r is None else r.metrics.clean_price,
+                         "ytw": None if r is None else round(r.metrics.yield_worst, 2), "dur": None if r is None else round(r.metrics.macaulay_duration, 2),
+                         "g_spread": None if r is None or r.metrics.g_spread is None else round(r.metrics.g_spread),
+                         "vs_peers": None if br.peers_excess is None else round(br.peers_excess), "peers_n": br.peers_n,
+                         "chg30": None if br.chg30 is None else round(br.chg30), "z": None if br.z is None else round(br.z, 1),
+                         "turnover_mln": None if r is None else round(r.quote.turnover / 1e6, 1),
+                         "news": "" if r is None or r.news is None or not r.news.n else f"{r.news.score:+.1f}",
+                         "in_screen": br.in_screen, "flags": "; ".join(br.flags)})
+        _print_df(pd.DataFrame(recs), csv=getattr(args, "csv", None))
+        for lst in LISTS:
+            act = [br for br in basket if br.entry.list == lst and br.entry.status == "active" and br.row is not None]
+            w = sum(br.entry.weight for br in act)
+            if w:
+                ytw = sum(br.entry.weight * br.row.metrics.yield_worst for br in act) / w
+                dur = sum(br.entry.weight * br.row.metrics.macaulay_duration for br in act) / w
+                print(f"Список {lst}: {len(act)} бумаг, вес {w:g}%, YTW {ytw:.2f}%, дюрация {dur:.2f}")
+        return
+    if action == "add":
+        if not args.query and not args.isin:
+            raise SystemExit("basket add: нужен запрос (название/SECID/ISIN) или --isin с --name")
+        if args.isin and args.name:
+            isin, secid, name = args.isin.strip().upper(), (args.secid or args.isin).strip().upper(), args.name.strip()
+        else:
+            snap = load_snapshot(settings, args.fixtures)
+            q = (args.query or args.isin).strip().upper()
+            hits = [b for b, _ in snap.universe if b.secid.upper() == q or (b.isin or "").upper() == q]
+            if not hits:
+                hits = [b for b, _ in snap.universe if q in f"{b.name} {b.full_name}".upper()]
+            if len(hits) != 1:
+                names = ", ".join(f"{b.secid} {b.name}" for b in hits[:12])
+                raise SystemExit(f"«{args.query or args.isin}»: {'не найдена на MOEX' if not hits else 'несколько бумаг: ' + names}; уточните SECID/ISIN")
+            b = hits[0]
+            isin, secid, name = (b.isin or b.secid).upper(), b.secid, b.name
+        ev = book.add(isin, secid, name, list_=args.list or "A", weight=args.weight or 0.0, status=args.status or "active", note=args.note or "", on=on)
+        book.save()
+        print(f"{ev}\n→ {book.path}")
+        return
+    if action == "set":
+        if not args.query:
+            raise SystemExit("basket set: нужен запрос (название/SECID/ISIN из книги)")
+        ents = book.find(args.query)
+        if not ents:
+            raise SystemExit(f"«{args.query}»: нет в корзине (bondtrader basket list --all)")
+        if len(ents) > 1 and not args.all:
+            raise SystemExit("«{}»: несколько записей ({}); уточните или добавьте --all".format(args.query, ", ".join(e.name for e in ents)))
+        for e in ents:
+            ev = book.update(e.isin, status=args.status, list_=args.list, weight=args.weight, note=args.note or "", on=on)
+            print(ev or f"{e.name}: без изменений")
+        book.save()
+        print(f"→ {book.path}")
+        return
+    raise SystemExit(f"basket: неизвестное действие {action}; допустимы list | status | add | set | log")
 
 
 def build_report(args, settings, data: Optional[dict] = None) -> str:
@@ -517,6 +630,22 @@ def build_report(args, settings, data: Optional[dict] = None) -> str:
     L.append(f"## Алерты ({len(alerts)})")
     L += [f"- {a}" for a in alerts] or ["- всё спокойно"]
     L.append("")
+    book, basket = d.get("basket_book"), d.get("basket") or []
+    if book is not None and book.live():
+        L.append(f"## Корзина ({book.summary()})")
+        L.append("| список | бумага | статус | вес | рейтинг | YTW | дюр. | спред | к пирам | 30 дн. | оборот | флаги |")
+        L.append("|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|---|")
+        for br in basket:
+            e, r = br.entry, br.row
+            if r is None:
+                L.append(f"| {e.list} | {e.name} | {e.status} | {e.weight:g}% | — | — | — | — | — | — | — | {'; '.join(br.flags)} |")
+                continue
+            gs = "—" if r.metrics.g_spread is None else f"{r.metrics.g_spread:.0f}"
+            px = "—" if br.peers_excess is None else f"{br.peers_excess:+.0f}"
+            c30 = "—" if br.chg30 is None else f"{br.chg30:+.0f}"
+            L.append(f"| {e.list} | {r.bond.name} | {e.status} | {e.weight:g}% | {r.rating_str} | {r.metrics.yield_worst:.1f}% | "
+                     f"{r.metrics.macaulay_duration:.1f} | {gs} | {px} | {c30} | {r.quote.turnover / 1e6:.1f} | {'; '.join(br.flags)} |")
+        L.append("")
     if pf.positions:
         L.append("## Позиции")
         L.append("| secid | бумага | qty | ср. цена | цена | вес | YTW | дюр. | рейтинг | новости |")
@@ -1735,6 +1864,18 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--top", type=int, default=30); sp.add_argument("--csv"); sp.set_defaults(fn=cmd_issuer)
     sp = sub.add_parser("why", parents=[common], help="выпуски эмитента: прошли ли сито, почему нет, проходят ли риск-лимиты и стратегию"); screen_opts(sp); strat_opts(sp)
     sp.add_argument("query", help="часть названия (НЛМК), SECID или ISIN; несколько вариантов через запятую"); sp.set_defaults(fn=cmd_why)
+    sp = sub.add_parser("basket", parents=[common], help="корзина — накопительная книга выбранных бумаг: list | status | add | set | log"); screen_opts(sp)
+    sp.add_argument("action", nargs="?", default="list", choices=["list", "status", "add", "set", "log"])
+    sp.add_argument("query", nargs="?", help="add: название/SECID/ISIN на MOEX; set: бумага из книги (часть названия/SECID/ISIN, несколько через запятую)")
+    sp.add_argument("--list", choices=["A", "B"], help="список: A — ступень A- и выше с плечом, B — ВДО без плеча")
+    sp.add_argument("--weight", type=float, help="доля капитала своего списка, %")
+    sp.add_argument("--status", choices=["active", "hold", "wait", "removed"], help="active — в портфеле, hold — пауза, wait — лист ожидания, removed — исключена")
+    sp.add_argument("--note", help="причина изменения — идёт в журнал и в заметку записи")
+    sp.add_argument("--date", help="дата решения ГГГГ-ММ-ДД (по умолчанию сегодня)")
+    sp.add_argument("--isin"); sp.add_argument("--secid"); sp.add_argument("--name", help="add без сети: --isin и --name (и --secid) вместо поиска на MOEX")
+    sp.add_argument("--all", action="store_true", help="list: показать и исключённые; set: применить ко всем совпадениям")
+    sp.add_argument("--top", type=int, default=40, help="log: сколько последних записей"); sp.add_argument("--csv")
+    sp.set_defaults(fn=cmd_basket)
     sp = sub.add_parser("notify", parents=[common], help="отправить текст/файл в Telegram"); sp.add_argument("--file"); sp.add_argument("--text")
     sp.add_argument("--whoami", action="store_true", help="показать chat_id тех, кто писал боту (для секрета TELEGRAM_CHAT_ID)")
     sp.add_argument("--html", action="store_true", help="файл уже в HTML-разметке Telegram (report --tg-file)")

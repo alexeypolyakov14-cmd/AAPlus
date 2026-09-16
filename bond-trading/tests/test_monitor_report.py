@@ -64,6 +64,7 @@ def test_monitor_and_report_cli(tmp_path, capsys):
 data:
   news_csv: {tmp_path / 'data' / 'news.csv'}
   ratings_csv: ''
+  basket_csv: ''
 execution:
   broker: paper
   state_path: {tmp_path / 'pf.json'}
@@ -108,6 +109,7 @@ def _report_data(tmp_path):
 data:
   news_csv: {tmp_path / 'data' / 'news.csv'}
   ratings_csv: ''
+  basket_csv: ''
 execution:
   broker: paper
   state_path: {tmp_path / 'pf.json'}
@@ -124,7 +126,7 @@ backtest:
 def test_bot_parse_and_render(tmp_path):
     from bondtrader.bot import HELP, keyboard, parse_update, render
     kb = keyboard()["inline_keyboard"]
-    assert [b["callback_data"] for row in kb for b in row] == ["report", "positions", "news", "screen", "alerts"]
+    assert [b["callback_data"] for row in kb for b in row] == ["report", "basket", "positions", "news", "screen", "alerts"]
     assert parse_update({"update_id": 1, "message": {"chat": {"id": 42}, "text": "/positions@LTT_bot"}}) == ("42", "positions", None)
     assert parse_update({"update_id": 2, "message": {"chat": {"id": 42}, "text": "привет"}}) is None
     assert parse_update({"update_id": 3, "callback_query": {"id": "cq1", "data": "news", "message": {"chat": {"id": 42}}}}) == ("42", "news", "cq1")

@@ -168,6 +168,48 @@ def section_news(d: dict, days: int = 7, limit: int = 12) -> list[str]:
     return S
 
 
+def section_basket(d: dict, flags_limit: int = 10) -> list[str]:
+    """Корзина (накопительная книга): живой срез по спискам A/B, флаги, пауза и лист ожидания."""
+    from .basket import STATUS_RU
+    book, basket = d.get("basket_book"), d.get("basket") or []
+    if book is None or not book.live():
+        return []
+    S: list[str] = [f"<b>Корзина</b> · {_e(book.summary())}"]
+    for lst in ("A", "B"):
+        rows = [br for br in basket if br.entry.list == lst and br.entry.status == "active"]
+        if not rows:
+            continue
+        lines = ["Бумага      Вес  YTW Спред  Пиры"]
+        wsum = ysum = dsum = 0.0
+        for br in sorted(rows, key=lambda x: -x.entry.weight):
+            e, r = br.entry, br.row
+            mark = "!" if br.flags else " "
+            if r is None:
+                lines.append(f"{_name(e.name, 11)}{e.weight:4.0f}    —     —     —{mark}")
+                continue
+            gs = r.metrics.g_spread
+            px = f"{br.peers_excess:+5.0f}" if br.peers_excess is not None else "    —"
+            lines.append(f"{_name(r.bond.name, 11)}{e.weight:4.0f} {r.metrics.yield_worst:4.1f} {gs if gs is None else round(gs):5} {px}{mark}")
+            wsum += e.weight
+            ysum += e.weight * r.metrics.yield_worst
+            dsum += e.weight * r.metrics.macaulay_duration
+        if wsum:
+            lines.append(f"{'Список ' + lst + ' (вес ' + f'{wsum:.0f}%)':<16}{ysum / wsum:4.1f}%  дюр. {dsum / wsum:.1f}")
+        # <pre>-таблица отдельным блоком (пустые строки вокруг): нарезка сообщений идёт по блокам и не рвёт таблицу
+        S += ["", "<pre>" + _e("\n".join(lines)) + "</pre>", ""]
+    flagged = [(br, f) for br in basket if br.entry.status == "active" for f in br.flags]
+    for br, f in flagged[:flags_limit]:
+        S.append(f"⚠️ <b>{_e(br.name)}</b>: {_e(f)}")
+    if len(flagged) > flags_limit:
+        S.append(f"… ещё {len(flagged) - flags_limit}")
+    parked = [br for br in basket if br.entry.status in ("hold", "wait")]
+    if parked:
+        S.append("Вне портфеля: " + "; ".join(f"{_e(br.name)} ({STATUS_RU[br.entry.status]}"
+                                              + (f", YTW {br.row.metrics.yield_worst:.1f}%" if br.row is not None else "") + ")" for br in parked))
+    S.append("Пиры — премия к медиане похожих, б.п.; ! — есть флаг. Состав меняется только командой basket.")
+    return S
+
+
 def section_stops(d: dict) -> list[str]:
     snap = d["snap"]
     stops = [(s, why) for s, why in (snap.rejected or {}).items() if any(m in why.lower() for m in ("дефолт", "default", "новости:"))]
@@ -201,7 +243,8 @@ def section_screen(d: dict, limit: int = 15) -> list[str]:
 
 
 def render_telegram(d: dict) -> str:
-    parts = [section_header(d), section_portfolio(d), section_alerts(d), section_positions(d), section_target(d), section_news(d), section_stops(d)]
+    parts = [section_header(d), section_portfolio(d), section_alerts(d), section_basket(d), section_positions(d), section_target(d),
+             section_news(d), section_stops(d)]
     return "\n\n".join("\n".join(p) for p in parts if p).strip()
 
 

@@ -85,6 +85,11 @@ bondtrader issuer "ТГК-14"                          # все выпуски �
 bondtrader signals -s gspread -p rank=history -p min_excess_bp=150   # отбор по расширению спреда за 30 дн.
 bondtrader signals -s gspread -p rank=issuer -p min_excess_bp=100    # отбор по превышению над кривой эмитента
 bondtrader why "НЛМК"                              # все выпуски эмитента и почему (не) в скрине
+bondtrader basket                                  # корзина: накопительная книга выбранных бумаг (data/books/basket.csv)
+bondtrader basket status                           # живой срез корзины: цены, YTW, спред, премия к пирам, 30 дн., флаги
+bondtrader basket add "ПолипП2Б17" --list A --weight 8 --note "…"   # добавить решением (бумага остаётся в книге навсегда)
+bondtrader basket set "Почта" --status hold --note "флаг MOEX"       # статус active|hold|wait|removed, вес, список — с датой и причиной в журнал
+bondtrader basket log                              # журнал изменений
 bondtrader report --broker tinvest --telegram      # отчёт в чат: HTML-таблицы позиций/P&L, алерты, цель, новости + кнопки
 bondtrader bot --menu                              # прислать справку с кнопками и ответить на накопившиеся запросы
 bondtrader bot --broker tinvest --poll             # локально: long polling, ответы мгновенно
@@ -164,7 +169,8 @@ bond-trading/
 │   ├── monitor.py           # алерты по позициям (стоп-факторы, просадки, новости)
 │   ├── report_tg.py         # секции отчёта для Telegram (HTML, <pre>-таблицы)
 │   ├── notify.py            # Telegram Bot API: sendMessage, getUpdates, клавиатуры
-│   ├── bot.py               # кнопки/команды бота: отчёт, позиции, новости, скрин, алерты
+│   ├── bot.py               # кнопки/команды бота: отчёт, корзина, позиции, новости, скрин, алерты
+│   ├── basket.py            # корзина: накопительная книга бумаг (статусы, журнал) и её живой срез для отчёта
 │   ├── analytics/           # bond_math.py, curve.py, fair_spread.py, peers.py (пиры), history.py (спред vs своя история), issuer_curve.py (кривая эмитента)
 │   ├── data/                # moex.py, cbr.py, cache.py, tls.py, ratings.py, ratings_web.py, financials.py, girbo.py, disclosure.py, news.py, sectors.py, history.py (история спредов + книга кривых)
 │   ├── strategies/          # base.py, ladder.py, spread.py, rate_cycle.py, carry.py, value_hy.py, gspread.py
@@ -174,6 +180,7 @@ bond-trading/
 │   └── fixtures/make_fixtures.py   # генератор фикстур (цены согласованы с кривой)
 ├── configs/                 # moderate.yaml (ОФЗ+качественные корпораты), hy.yaml (ВДО, максимальный риск)
 ├── data/                    # книги: ratings.csv, financials.csv, issuers.csv, disclosure.csv, news.csv (кэш HTTP игнорируется git)
+│   └── books/               # книги в репозитории (не в кэше Actions): basket.csv + basket_log.csv (корзина), financials.csv, issuers.csv
 ├── config.example.yaml
 └── pyproject.toml
 ```
