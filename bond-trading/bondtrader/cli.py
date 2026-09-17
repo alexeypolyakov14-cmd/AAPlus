@@ -866,8 +866,8 @@ def cmd_ratings(args, settings):
         for r in got:
             key = (r.subject, r.agency, r.kind, r.isin, r.date)
             if key not in seen:
-                book.add(r); seen.add(key); added += 1
-            elif r.url and not existing[key].url:
+                book.add(r); seen.add(key); existing[key] = r; added += 1
+            elif r.url and not existing[key].url:      # дубль ключа в свежей выгрузке (после add) тоже попадает сюда
                 existing[key].url = r.url; linked += 1      # АКРА накопительно: старым записям доклеиваем адрес релиза
         if linked:
             print(f"Адреса релизов проставлены у {linked} старых записей", file=sys.stderr)

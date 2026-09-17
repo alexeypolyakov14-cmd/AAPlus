@@ -318,3 +318,21 @@ def test_primary_agency_policy():
     assert set(RatingsBook(recs).latest_by_agency(b)) == {"Эксперт РА", "НКР", "АКРА"}
     book = RatingsBook(recs)
     assert book.drop_agency("Эксперт РА") == 1 and len(book) == 2 and book.lookup(b).agency == "НКР"
+
+
+def test_ratings_fetch_tolerates_duplicate_keys(tmp_path, monkeypatch):
+    """Дубль ключа в свежей выгрузке (та же запись дважды, вторая с адресом релиза) не должен ронять fetch до сохранения книги."""
+    from datetime import date
+    from bondtrader import cli
+    from bondtrader.data import ratings_web
+    from bondtrader.data.ratings import Rating
+    r1 = Rating('ООО "ТКК"', "Эксперт РА", "ruBBB", kind="issue", date=date(2026, 8, 19))
+    r2 = Rating('ООО "ТКК"', "Эксперт РА", "ruBBB", kind="issue", date=date(2026, 8, 19), url="https://raexpert.ru/x")
+    monkeypatch.setattr(ratings_web, "load_raexpert", lambda: [r1, r2])
+    monkeypatch.setattr(ratings_web, "load_nkr_tables", lambda: [])
+    monkeypatch.setattr(ratings_web, "load_acra_press", lambda max_pages=0: [])
+    csv = tmp_path / "r.csv"
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(f"data:\n  ratings_csv: {csv}\n", encoding="utf-8")
+    assert cli.main(["-c", str(cfg), "ratings", "fetch", "--sources", "raexpert"]) == 0
+    assert csv.exists() and "https://raexpert.ru/x" in csv.read_text(encoding="utf-8")
