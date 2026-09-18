@@ -200,14 +200,15 @@ jobs:
       - name: Сертификаты УЦ Минцифры (T-Invest)
         if: env.TINVEST_TOKEN != ''
         run: |
-          set -e
+          # gu-st.ru иногда рвёт соединение: до 6 попыток; если не вышло — не валим отчёт, а идём без T-Invest (бумажный портфель)
           cp "$(python -m certifi)" /tmp/ca-bundle.pem
+          ok=1
           for name in russian_trusted_root_ca russian_trusted_sub_ca; do
-            curl -sSfLo /tmp/$name.raw "https://gu-st.ru/content/lending/${name}_pem.crt"
+            if ! curl -sSfL --retry 6 --retry-delay 5 --retry-all-errors -o /tmp/$name.raw "https://gu-st.ru/content/lending/${name}_pem.crt"; then ok=0; break; fi
             if grep -q "BEGIN CERTIFICATE" /tmp/$name.raw; then openssl x509 -in /tmp/$name.raw -inform PEM -out /tmp/$name.pem; else openssl x509 -in /tmp/$name.raw -inform DER -out /tmp/$name.pem; fi
             printf '\n' >> /tmp/ca-bundle.pem; cat /tmp/$name.pem >> /tmp/ca-bundle.pem
           done
-          echo "TINVEST_CA_BUNDLE=/tmp/ca-bundle.pem" >> "$GITHUB_ENV"
+          if [ "$ok" = 1 ]; then echo "TINVEST_CA_BUNDLE=/tmp/ca-bundle.pem" >> "$GITHUB_ENV"; else echo "::warning::сертификаты УЦ Минцифры не скачались — отчёт без T-Invest (бумажный портфель)"; fi
       - name: Книги (кэш) — рейтинги, новости, отчётность, факты
         uses: actions/cache@v4
         with:
@@ -242,7 +243,7 @@ jobs:
         run: bondtrader news fetch --from-screen --general 2>&1 | tail -5
       - name: Отчёт (бумажный портфель или песочница T-Invest)
         run: |
-          if [ -n "$TINVEST_TOKEN" ]; then BR="--broker tinvest"; else BR=""; fi
+          if [ -n "$TINVEST_TOKEN" ] && [ -n "$TINVEST_CA_BUNDLE" ]; then BR="--broker tinvest"; else BR=""; fi
           bondtrader report $BR --md report.md --tg-file report_tg.html > /dev/null
           cat report.md >> "$GITHUB_STEP_SUMMARY"
           bondtrader monitor $BR --strict || echo "::warning::есть критические алерты по позициям — см. отчёт"
@@ -293,14 +294,15 @@ jobs:
       - name: Сертификаты УЦ Минцифры (T-Invest)
         if: env.TINVEST_TOKEN != ''
         run: |
-          set -e
+          # gu-st.ru иногда рвёт соединение: до 6 попыток; если не вышло — не валим отчёт, а идём без T-Invest (бумажный портфель)
           cp "$(python -m certifi)" /tmp/ca-bundle.pem
+          ok=1
           for name in russian_trusted_root_ca russian_trusted_sub_ca; do
-            curl -sSfLo /tmp/$name.raw "https://gu-st.ru/content/lending/${name}_pem.crt"
+            if ! curl -sSfL --retry 6 --retry-delay 5 --retry-all-errors -o /tmp/$name.raw "https://gu-st.ru/content/lending/${name}_pem.crt"; then ok=0; break; fi
             if grep -q "BEGIN CERTIFICATE" /tmp/$name.raw; then openssl x509 -in /tmp/$name.raw -inform PEM -out /tmp/$name.pem; else openssl x509 -in /tmp/$name.raw -inform DER -out /tmp/$name.pem; fi
             printf '\n' >> /tmp/ca-bundle.pem; cat /tmp/$name.pem >> /tmp/ca-bundle.pem
           done
-          echo "TINVEST_CA_BUNDLE=/tmp/ca-bundle.pem" >> "$GITHUB_ENV"
+          if [ "$ok" = 1 ]; then echo "TINVEST_CA_BUNDLE=/tmp/ca-bundle.pem" >> "$GITHUB_ENV"; else echo "::warning::сертификаты УЦ Минцифры не скачались — отчёт без T-Invest (бумажный портфель)"; fi
       - name: Книги (кэш) — рейтинги, новости, отчётность, факты
         uses: actions/cache/restore@v4
         with:
@@ -329,7 +331,7 @@ jobs:
           restore-keys: metrics-
       - name: Ответить на накопившиеся нажатия и команды
         run: |
-          if [ -n "$TINVEST_TOKEN" ]; then BR="--broker tinvest"; else BR=""; fi
+          if [ -n "$TINVEST_TOKEN" ] && [ -n "$TINVEST_CA_BUNDLE" ]; then BR="--broker tinvest"; else BR=""; fi
           MENU=""; if [ "${{ inputs.bot_menu }}" = "true" ]; then MENU="--menu"; fi
           bondtrader bot $BR $MENU
 
@@ -408,7 +410,7 @@ jobs:
           set -e
           cp "$(python -m certifi)" /tmp/ca-bundle.pem
           for name in russian_trusted_root_ca russian_trusted_sub_ca; do
-            curl -sSfLo /tmp/$name.raw "https://gu-st.ru/content/lending/${name}_pem.crt"
+            curl -sSfL --retry 6 --retry-delay 5 --retry-all-errors -o /tmp/$name.raw "https://gu-st.ru/content/lending/${name}_pem.crt"
             echo "== $name: $(file -b /tmp/$name.raw | cut -c1-60)"
             if grep -q "BEGIN CERTIFICATE" /tmp/$name.raw; then
               openssl x509 -in /tmp/$name.raw -inform PEM -out /tmp/$name.pem
