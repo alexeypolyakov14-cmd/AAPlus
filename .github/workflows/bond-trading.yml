@@ -61,6 +61,23 @@ defaults:
     working-directory: bond-trading
 
 jobs:
+  gate:
+    name: Опоздало ли расписание
+    runs-on: ubuntu-latest
+    outputs:
+      late: ${{ steps.check.outputs.late }}
+    steps:
+      - id: check
+        # GitHub запускает cron 07:40 UTC с опозданием на часы (видели 12:47, 14:30 UTC). К тому времени отчёт уже ушёл
+        # через страховку, а поздний запуск слал его второй раз и крутил часовой живой прогон. Позже 09:10 UTC — пропускаем.
+        run: |
+          late=false
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "${{ github.event.schedule }}" = "40 7 * * 1-5" ]; then
+            now=$(date -u +%s); slot=$(date -u -d "today 07:40" +%s)
+            if [ $((now - slot)) -gt 5400 ]; then late=true; echo "::warning::расписание 07:40 UTC опоздало на $(( (now - slot) / 60 )) мин — отчёт и живой прогон пропущены (страховка уже отработала)"; fi
+          fi
+          echo "late=$late" >> "$GITHUB_OUTPUT"
+
   test:
     name: Тесты (офлайн, фикстуры)
     runs-on: ubuntu-latest
@@ -78,10 +95,10 @@ jobs:
   live-smoke:
     name: Живой прогон MOEX + ЦБ
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, gate]
     # долгий job (~35 мин): только по push в main, по ежедневному расписанию или по явной галочке smoke —
     # иначе каждый push/разовая команда сжигали по 35 минут лимита Actions
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'schedule' && github.event.schedule == '40 7 * * 1-5') || (github.event_name == 'workflow_dispatch' && inputs.smoke)
+    if: needs.gate.outputs.late != 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'schedule' && github.event.schedule == '40 7 * * 1-5') || (github.event_name == 'workflow_dispatch' && inputs.smoke))
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -185,7 +202,8 @@ jobs:
   daily:
     name: Ежедневный отчёт (расписание 10:40 МСК; профиль hy)
     runs-on: ubuntu-latest
-    if: (github.event_name == 'schedule' && github.event.schedule == '40 7 * * 1-5') || (github.event_name == 'workflow_dispatch' && inputs.daily)
+    needs: gate
+    if: needs.gate.outputs.late != 'true' && ((github.event_name == 'schedule' && github.event.schedule == '40 7 * * 1-5') || (github.event_name == 'workflow_dispatch' && inputs.daily))
     env:
       TINVEST_TOKEN: ${{ secrets.TINVEST_TOKEN }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
